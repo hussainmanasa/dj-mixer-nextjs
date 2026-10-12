@@ -1,0 +1,99 @@
+// Transition recipes: Web Audio automation applied to an outgoing and an
+// incoming deck. Each function schedules everything in advance from context
+// time `t` (when the incoming track starts) and returns when the transition
+// is over, so the caller can hand over control.
+
+import type { TransitionKind } from "@/lib/types";
+import { Deck, EQ_KILL_DB } from "./deck";
+
+export interface TransitionPlan {
+  kind: TransitionKind;
+  /** Context time the incoming deck starts. */
+  start: number;
+  /** Context time the outgoing deck is silent and can be stopped. */
+  end: number;
+}
+
+/**
+ * Long beat-matched blend with a bass swap halfway:
+ *   bars 0..½  incoming fades in with its bass killed
+ *   at ½       basslines swap in one beat (never two kicks at once)
+ *   bars ½..1  outgoing fades out with its bass killed
+ */
+export function blend(out: Deck, inc: Deck, t: number, bars: number, beatSec: number): TransitionPlan {
+  const len = bars * 4 * beatSec;
+  const mid = t + len / 2;
+
+  inc.resetControls(0);
+  inc.low.gain.setValueAtTime(EQ_KILL_DB, t);
+  inc.fader.gain.setValueAtTime(0, t);
+  inc.fader.gain.linearRampToValueAtTime(1, mid);
+  inc.low.gain.setValueAtTime(EQ_KILL_DB, mid - beatSec);
+  inc.low.gain.linearRampToValueAtTime(0, mid);
+
+  out.low.gain.setValueAtTime(0, mid - beatSec);
+  out.low.gain.linearRampToValueAtTime(EQ_KILL_DB, mid);
+  out.fader.gain.setValueAtTime(1, mid);
+  out.fader.gain.linearRampToValueAtTime(0, t + len);
+
+  return { kind: "blend", start: t, end: t + len };
+}
+
+/**
+ * Beat-matched filter sweep (8 bars): outgoing is high-passed away while the
+ * incoming opens up from a low-pass. Hides key clashes better than a blend.
+ */
+export function filterSweep(out: Deck, inc: Deck, t: number, beatSec: number): TransitionPlan {
+  const len = 8 * 4 * beatSec;
+  const end = t + len;
+
+  // Switch filter types now at inaudible cut-offs; the sweeps are scheduled.
+  out.filter.type = "highpass";
+  out.filter.frequency.cancelScheduledValues(0);
+  out.filter.frequency.setValueAtTime(10, 0);
+  out.filter.frequency.setValueAtTime(10, t);
+  out.filter.frequency.exponentialRampToValueAtTime(2500, end);
+  out.fader.gain.setValueAtTime(1, t + len * 0.6);
+  out.fader.gain.linearRampToValueAtTime(0, end);
+
+  inc.resetControls(0);
+  inc.filter.type = "lowpass";
+  inc.filter.frequency.setValueAtTime(300, t);
+  inc.filter.frequency.exponentialRampToValueAtTime(20000, end);
+  inc.fader.gain.setValueAtTime(0, t);
+  inc.fader.gain.linearRampToValueAtTime(1, t + len * 0.4);
+
+  return { kind: "filterSweep", start: t, end };
+}
+
+/**
+ * Echo-out for tempo jumps (no beat-matching): the outgoing track's last beat
+ * rings out through a dotted-eighth delay while its dry signal drops, then the
+ * incoming track starts clean two beats later at its own tempo.
+ */
+export function echoOut(out: Deck, inc: Deck, t: number, outBeatSec: number): TransitionPlan {
+  const tail = 8;
+  out.echoDelay.delayTime.setValueAtTime(Math.min(4, outBeatSec * 0.75), t);
+  out.echoSend.gain.setValueAtTime(0, t);
+  out.echoSend.gain.linearRampToValueAtTime(0.7, t + outBeatSec);
+  out.fader.gain.setValueAtTime(1, t + outBeatSec);
+  out.fader.gain.linearRampToValueAtTime(0, t + outBeatSec * 1.5);
+  out.echoSend.gain.setValueAtTime(0.7, t + outBeatSec * 1.5);
+  out.echoSend.gain.linearRampToValueAtTime(0, t + outBeatSec * 2);
+
+  const incStart = t + outBeatSec * 2;
+  inc.resetControls(0);
+  inc.fader.gain.setValueAtTime(1, incStart);
+
+  return { kind: "echoOut", start: incStart, end: incStart + tail };
+}
+
+/** Hard cut on a downbeat — the fallback when a beat grid can't be trusted. */
+export function cut(out: Deck, inc: Deck, t: number): TransitionPlan {
+  out.fader.gain.setValueAtTime(1, t - 0.01);
+  out.fader.gain.linearRampToValueAtTime(0, t + 0.02);
+  inc.resetControls(0);
+  inc.fader.gain.setValueAtTime(0, t - 0.01);
+  inc.fader.gain.linearRampToValueAtTime(1, t + 0.02);
+  return { kind: "cut", start: t, end: t + 0.05 };
+}
