@@ -53,6 +53,7 @@ const idle = (mood: MoodId, deckCount: number): AutoDJStatus => ({
   next: null,
   standby: null,
   queue: [],
+  keyLock: false,
   note: null,
   error: null,
   deckCount,

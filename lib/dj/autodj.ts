@@ -77,6 +77,8 @@ export interface AutoDJStatus {
   note: string | null;
   error: string | null;
   deckCount: number;
+  /** Key-lock is actually running (requested in settings and the worklet loaded). */
+  keyLock: boolean;
 }
 
 /** What one deck is doing right now, read every animation frame by the booth display. */
@@ -718,6 +720,7 @@ export class AutoDJ {
       note: this.note,
       error: this.error,
       deckCount: this.engine.decks.length,
+      keyLock: this.keyLockReady,
     });
   }
 }

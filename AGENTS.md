@@ -151,7 +151,9 @@ pitch by `1/playbackRate` (phase vocoder, N = 2048, hop N/8, phase reset on tran
 pitch 1). Its delay is a constant `KEYLOCK_DELAY_SAMPLES` on every deck, so decks stay aligned; it sits after
 the faders so transition automation still lands on the beat. `engine.outputDelay` is that delay: the booth
 display and master effects add it (what the room hears lags the deck clock). Falls back to no key-lock if the
-worklet can't load. Takes effect at the next Play.
+worklet can't load. Takes effect at the next Play. The booth shows a **KEY LOCK** badge on each deck only when
+it is actually running (`AutoDJStatus.keyLock`), and labels the rate change "tempo ±x%" — key-lock keeps the
+pitch, not the tempo, so the percentage still moves while beat-matching.
 
 Drop extras: a staff Drop with a build-up also fires a noise riser that peaks exactly as the drop hits
 (`MasterFx.riserBetween`), cancelled if the Drop is re-planned. Moods with `dropSwap` (Peak Hour) turn their

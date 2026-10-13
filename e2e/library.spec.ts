@@ -24,7 +24,14 @@ test("admin can flag, crate and fix a track; fixes show in the table", async ({ 
   await dialog.getByRole("button", { name: "Listen with clicks" }).click();
   await expect(dialog.getByRole("button", { name: "Stop" })).toBeVisible();
   await dialog.getByRole("button", { name: "Stop" }).click();
-  await dialog.getByLabel("BPM").fill("127.5");
+  // Arrow keys step the BPM by 1 and keep the decimals.
+  const bpmInput = dialog.getByLabel("BPM");
+  await bpmInput.fill("126.5");
+  await bpmInput.press("ArrowUp");
+  await expect(bpmInput).toHaveValue("127.5");
+  await bpmInput.press("ArrowUp");
+  await bpmInput.press("ArrowDown");
+  await expect(bpmInput).toHaveValue("127.5");
   await dialog.getByRole("button", { name: "Apply grid" }).click();
   await expect(dialog.getByRole("button", { name: "Apply grid" })).toBeDisabled({ timeout: 30_000 });
   await dialog.getByRole("button", { name: "Done" }).click();

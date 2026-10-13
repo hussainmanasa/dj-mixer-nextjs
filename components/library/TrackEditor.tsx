@@ -214,6 +214,7 @@ function GridSection({ track }: { track: Track }) {
 
   const beat = 60 / bpm;
   const changed = Math.abs(bpm - a.bpm) > 1e-6 || Math.abs(firstBeat - a.firstBeat) > 1e-6;
+  const validBpm = bpm >= 60 && bpm <= 200;
   const firstDrop = a.barLevels ? drops(a.barLevels, a.fullLevel)[0] : undefined;
   // Listen where the beat is clearest: the first drop, else half a minute in.
   const from = firstDrop ? a.firstBeat + firstDrop.start * (240 / a.bpm) : Math.min(30, a.duration / 3);
@@ -261,11 +262,17 @@ function GridSection({ track }: { track: Track }) {
             BPM
             <input
               type="number"
-              step={0.01}
-              min={60}
-              max={200}
+              // Arrows step by 1 BPM from the current value (no `min`, which would snap 126.97 → 127);
+              // decimals can still be typed.
+              step={1}
               value={Math.round(bpm * 100) / 100}
               onChange={(e) => Number(e.target.value) > 0 && setBpm(Number(e.target.value))}
+              onKeyDown={(e) => {
+                if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+                e.preventDefault();
+                const delta = e.key === "ArrowUp" ? 1 : -1;
+                setBpm((b) => Math.min(200, Math.max(60, Math.round((b + delta) * 100) / 100)));
+              }}
               className="h-9 w-24 rounded-lg border border-border bg-surface-2 px-2 font-mono outline-none focus:border-accent"
               aria-label="BPM"
             />
@@ -299,7 +306,7 @@ function GridSection({ track }: { track: Track }) {
         <button type="button" className="btn" disabled={boothPlaying || busy === "apply"} onClick={listen}>
           {busy === "listen" ? "Stop" : "Listen with clicks"}
         </button>
-        <button type="button" className="btn-primary" disabled={!changed || busy !== null} onClick={apply}>
+        <button type="button" className="btn-primary" disabled={!changed || !validBpm || busy !== null} onClick={apply}>
           {busy === "apply" ? "Re-analysing…" : "Apply grid"}
         </button>
         <button
@@ -319,6 +326,7 @@ function GridSection({ track }: { track: Track }) {
           Back to detected
         </button>
         {boothPlaying && <span className="text-sm text-warn">Stop the set to listen — previews play through the club speakers.</span>}
+        {!validBpm && <span className="text-sm text-bad">BPM must be between 60 and 200.</span>}
         {error && <span className="text-sm text-bad">{error}</span>}
       </div>
     </Section>

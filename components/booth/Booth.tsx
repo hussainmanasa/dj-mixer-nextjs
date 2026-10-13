@@ -76,7 +76,9 @@ export function Booth() {
         : role === "standby"
           ? { label: "Queue track", open: () => setPicker({ next: false }) }
           : { label: track ? "Change track" : "Choose track", open: () => setPicker({ next: true }) };
-    return <DeckPanel key={i} deck={i} role={role} track={track} color={color} onChoose={choose} />;
+    return (
+      <DeckPanel key={i} deck={i} role={role} track={track} color={color} onChoose={choose} keyLock={status.playing && status.keyLock} />
+    );
   });
 
   const centre = (

@@ -29,16 +29,19 @@ export function DeckPanel({
   track,
   color,
   onChoose,
+  keyLock = false,
 }: {
   deck: number;
   role: DeckRole;
   track: Track | null;
   color: string;
   onChoose?: { label: string; open: () => void };
+  /** Key-lock is running: tempo changes don't change pitch. */
+  keyLock?: boolean;
 }) {
   const badge = useRef<HTMLSpanElement>(null);
   const bpm = useRef<HTMLSpanElement>(null);
-  const pitch = useRef<HTMLSpanElement>(null);
+  const tempo = useRef<HTMLSpanElement>(null);
   const time = useRef<HTMLSpanElement>(null);
   const fader = useRef<HTMLDivElement>(null);
   const bass = useRef<HTMLSpanElement>(null);
@@ -61,7 +64,8 @@ export function DeckPanel({
     const rate = view?.rate ?? 1;
     setText(bpm.current, a ? (a.bpm * rate).toFixed(1) : "—");
     const pct = (rate - 1) * 100;
-    setText(pitch.current, view && Math.abs(pct) >= 0.05 ? `${pct > 0 ? "+" : ""}${pct.toFixed(1)}%` : "BPM");
+    // Tempo change from the track's own BPM (beat-matching). With key-lock on, pitch stays put.
+    setText(tempo.current, view && Math.abs(pct) >= 0.05 ? `tempo ${pct > 0 ? "+" : ""}${pct.toFixed(1)}%` : "BPM");
     setText(time.current, a ? `${formatTime(view?.position ?? 0)} / −${formatTime(a.duration - (view?.position ?? 0))}` : "");
     if (fader.current) fader.current.style.transform = `scaleY(${view ? view.fader : 0})`;
     if (bass.current) {
@@ -80,7 +84,18 @@ export function DeckPanel({
       style={{ borderColor: role === "live" ? color : "var(--border)" }}
     >
       <header className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-muted">Deck {DECK_LETTERS[deck]}</h3>
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-muted">Deck {DECK_LETTERS[deck]}</h3>
+          {keyLock && (
+            <span
+              className="rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+              style={{ borderColor: color, color }}
+              title="Key lock: the track keeps its original key while its tempo is matched"
+            >
+              Key lock
+            </span>
+          )}
+        </div>
         <span
           ref={badge}
           className="rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wider"
@@ -97,7 +112,7 @@ export function DeckPanel({
               <span ref={bpm} className="block font-mono text-2xl font-bold tabular-nums">
                 —
               </span>
-              <span ref={pitch} className="block font-mono text-xs text-muted">
+              <span ref={tempo} className="block font-mono text-xs text-muted">
                 BPM
               </span>
             </div>

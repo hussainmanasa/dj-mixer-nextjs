@@ -13,11 +13,16 @@ test("with key lock on, a Drop builds up and lands without errors or dead air", 
   await loadLibrary(page);
   await page.getByLabel("Keep tracks in their original key while matching tempo").check();
   await startBooth(page);
+  // Each deck says key-lock is running.
+  await expect(page.getByRole("region", { name: "Deck A" })).toContainText("Key lock");
+  await expect(page.getByRole("region", { name: "Deck B" })).toContainText("Key lock");
   await page.waitForTimeout(6000);
   await dropButton(page).click();
   await expect(dropButton(page)).toHaveText(/Drop in \d:\d\d/);
-  // Build-up: the next deck starts mixing in before the drop lands.
+  // Build-up: the next deck starts mixing in before the drop lands, tempo-matched.
   await expect.poll(async () => (await deckStates(page)).join(" "), { timeout: 20_000 }).toMatch(/Mixing in/);
+  await expect(page.locator("body")).toContainText(/tempo [+−-]\d+\.\d%/);
+  await page.screenshot({ path: "test-results/keylock-badge.png" });
   // Hand-over: the requested drop deck ends up on air alone.
   await expect.poll(async () => (await deckStates(page)).join(" "), { timeout: 30_000 }).not.toMatch(/Mixing/);
   await expect(page.locator("body")).not.toContainText("Recovered automatically");
@@ -29,6 +34,8 @@ test("Peak Hour swaps onto the next track's drop on its own", async ({ page }) =
   const errors = collectErrors(page);
   await loadLibrary(page);
   await startBooth(page, "Peak Hour");
+  // Key-lock is off by default: no badge.
+  await expect(page.getByRole("region", { name: "Deck A" })).not.toContainText("Key lock");
   // The planned transition is a drop swap, not a blend.
   await expect(page.getByText("Up next").locator("..")).toContainText("Drop");
   // It lands where the current track breaks down after its first drop (~bar 40, ~75 s in) and hands over.
