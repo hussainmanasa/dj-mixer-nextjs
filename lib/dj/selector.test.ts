@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Track, TrackAnalysis } from "@/lib/types";
 import { getMood } from "./moods";
-import { chooseTransition, isMoodJump, pickNext, rankCandidates, type SelectionContext } from "./selector";
+import { chooseTransition, isMoodJump, pickNext, rankCandidates, rankForRequest, type SelectionContext } from "./selector";
 import { mixOutPoint, nextDownbeat } from "./mixpoints";
 
 function track(id: string, bpm: number, energy: number, extra: Partial<Track> = {}, a: Partial<TrackAnalysis> = {}): Track {
@@ -120,5 +120,41 @@ describe("mix points", () => {
   it("finds the next downbeat", () => {
     expect(nextDownbeat(a, 0)).toBe(0.5);
     expect(nextDownbeat(a, 3)).toBe(4.5);
+  });
+});
+
+describe("rankForRequest", () => {
+  const current = track("cur", 122, 0.6);
+  const lib = [current, track("off", 140, 0.6), track("fit", 122, 0.6), track("again", 122, 0.6)];
+  const options = rankForRequest(lib, ctx({ current, currentBpm: 122, history: ["again"] }));
+
+  it("lists the best fit first and leaves out the playing track", () => {
+    expect(options.map((o) => o.track.id)).toEqual(["fit", "off", "again"]);
+  });
+
+  it("keeps recently played tracks, flagged, at the end", () => {
+    expect(options.at(-1)).toMatchObject({ recent: true });
+  });
+
+  it("flags tracks too far in tempo to beat-match", () => {
+    expect(options.find((o) => o.track.id === "off")?.syncable).toBe(false);
+    expect(options.find((o) => o.track.id === "fit")?.syncable).toBe(true);
+  });
+});
+
+describe("admin flags and crates", () => {
+  it("never picks a banned track and prefers favourites", () => {
+    const lib = [track("banned", 122, 0.6, { flag: "ban" }), track("fav", 122, 0.6, { flag: "favourite" }), track("plain", 122, 0.6)];
+    expect(pickNext(lib, ctx())?.id).toBe("fav");
+    expect(rankCandidates(lib, ctx()).map((c) => c.track.id)).not.toContain("banned");
+    expect(rankForRequest(lib, ctx()).map((o) => o.track.id)).not.toContain("banned");
+  });
+
+  it("limits a mood to its crates, falling back to the whole library if they're empty", () => {
+    const lib = [track("house", 122, 0.6, { crates: ["House"] }), track("other", 122, 0.6)];
+    const mood = { ...getMood("groove"), crates: ["House"] };
+    expect(rankCandidates(lib, ctx({ mood })).map((c) => c.track.id)).toEqual(["house"]);
+    const empty = { ...getMood("groove"), crates: ["Disco"] };
+    expect(rankCandidates(lib, ctx({ mood: empty }))).toHaveLength(2);
   });
 });

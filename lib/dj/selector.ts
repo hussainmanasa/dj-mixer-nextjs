@@ -19,6 +19,8 @@ export const WEIGHTS = {
   energy: 0.25,
   mood: 0.25,
   artistPenalty: 0.3,
+  /** Bonus for tracks the admin marked as favourites. */
+  favourite: 0.1,
 } as const;
 
 export interface SelectionContext {
@@ -95,19 +97,39 @@ export function scoreTrack(track: Track, ctx: SelectionContext): ScoreBreakdown 
       : 0;
 
   const total =
-    WEIGHTS.key * key + WEIGHTS.tempo * tempo + WEIGHTS.energy * energy + WEIGHTS.mood * mood - artistPenalty;
+    WEIGHTS.key * key +
+    WEIGHTS.tempo * tempo +
+    WEIGHTS.energy * energy +
+    WEIGHTS.mood * mood -
+    artistPenalty +
+    (track.flag === "favourite" ? WEIGHTS.favourite : 0);
   return { total, key, tempo, energy, mood, artistPenalty };
 }
 
-/** Candidates that may be played next (ready, analysed, not recently played, not current). */
+/** Playable at all: analysed and not banned. */
+export function playable(t: Track): boolean {
+  return t.status === "ready" && !!t.analysis && t.flag !== "ban";
+}
+
+/** The mood's crates, if it is limited to some and any of them has playable tracks. */
+function inMoodCrates(tracks: Track[], mood: Mood): Track[] {
+  const crates = mood.crates ?? [];
+  if (crates.length === 0) return tracks;
+  const limited = tracks.filter((t) => t.crates?.some((c) => crates.includes(c)));
+  return limited.length > 0 ? limited : tracks;
+}
+
+/**
+ * Candidates that may be played next: playable, in the mood's crates (if it
+ * has any with tracks), not recently played, not current.
+ */
 export function eligible(tracks: Track[], ctx: SelectionContext, exclude: Set<string> = new Set()): Track[] {
   const recent = new Set(ctx.history.slice(0, NO_REPEAT_WINDOW));
-  let pool = tracks.filter(
-    (t) => t.status === "ready" && t.analysis && !recent.has(t.id) && !exclude.has(t.id) && t.id !== ctx.current?.id,
-  );
+  const all = inMoodCrates(tracks.filter(playable), ctx.mood);
+  let pool = all.filter((t) => !recent.has(t.id) && !exclude.has(t.id) && t.id !== ctx.current?.id);
   if (pool.length === 0) {
     // Small library: allow repeats, but never the current or excluded track.
-    pool = tracks.filter((t) => t.status === "ready" && t.analysis && !exclude.has(t.id) && t.id !== ctx.current?.id);
+    pool = all.filter((t) => !exclude.has(t.id) && t.id !== ctx.current?.id);
   }
   return pool;
 }
@@ -121,6 +143,36 @@ export function rankCandidates(tracks: Track[], ctx: SelectionContext, exclude?:
 
 export function pickNext(tracks: Track[], ctx: SelectionContext, exclude?: Set<string>): Track | null {
   return rankCandidates(tracks, ctx, exclude)[0]?.track ?? null;
+}
+
+export interface RequestOption {
+  track: Track;
+  /** Same score the auto-DJ uses (mood, tempo, key, energy). */
+  score: number;
+  moodFit: number;
+  /** Played within the no-repeat window. */
+  recent: boolean;
+  /** Close enough in tempo to beat-match from the playing track. */
+  syncable: boolean;
+}
+
+/**
+ * Every playable track for the staff track picker, the best fit for the mood
+ * and the playing track first. Unlike `eligible`, recently played tracks are
+ * kept (listed last and flagged) — staff may want a request again.
+ */
+export function rankForRequest(tracks: Track[], ctx: SelectionContext): RequestOption[] {
+  const recent = new Set(ctx.history.slice(0, NO_REPEAT_WINDOW));
+  return tracks
+    .filter((t) => playable(t) && t.id !== ctx.current?.id)
+    .map((track) => ({
+      track,
+      score: scoreTrack(track, ctx).total,
+      moodFit: moodFit(track, ctx.mood),
+      recent: recent.has(track.id),
+      syncable: ctx.currentBpm === null || tempoDelta(ctx.currentBpm, track.analysis!.bpm) <= MAX_SYNC_DELTA,
+    }))
+    .sort((x, y) => Number(x.recent) - Number(y.recent) || y.score - x.score);
 }
 
 /** Pick the transition recipe between the playing track and the incoming one. */

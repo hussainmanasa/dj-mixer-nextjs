@@ -1,17 +1,24 @@
-// The audio graph: N decks (2–4) → master bus (limiter) → speakers, with an
-// analyser on the master for level metering and silence detection.
+// The audio graph: N decks (2–4) → master bus → effects → limiter → speakers, with
+// analysers on the master for level metering and silence detection.
 // Client-only. Create it from a user gesture (browsers block audio otherwise).
 
 import { MAX_DECKS, MIN_DECKS } from "@/lib/types";
 import { Deck } from "./deck";
+import { MasterFx } from "./fx";
+import { createKeyLock, KEYLOCK_DELAY_SAMPLES, loadKeyLock } from "./keylock";
 
 export class AudioEngine {
   readonly ctx: AudioContext;
   readonly master: GainNode;
+  /** Staff-fired effects on the whole mix (never on a single deck's automation). */
+  readonly fx: MasterFx;
   readonly limiter: DynamicsCompressorNode;
   readonly analyser: AnalyserNode;
+  /** Long window (~0.7 s) so the silence watchdog never falls between beats. */
+  readonly watchAnalyser: AnalyserNode;
   readonly decks: Deck[];
   private readonly levelBuf: Float32Array<ArrayBuffer>;
+  private readonly watchBuf: Float32Array<ArrayBuffer>;
 
   constructor(deckCount: number) {
     const n = Math.max(MIN_DECKS, Math.min(MAX_DECKS, Math.round(deckCount)));
@@ -26,9 +33,29 @@ export class AudioEngine {
       release: 0.15,
     });
     this.analyser = new AnalyserNode(this.ctx, { fftSize: 2048 });
-    this.master.connect(this.limiter).connect(this.analyser).connect(this.ctx.destination);
+    this.watchAnalyser = new AnalyserNode(this.ctx, { fftSize: 32768 });
+    // Analysers pass audio through unchanged; chaining them keeps both processed.
+    this.fx = new MasterFx(this.ctx, this.limiter);
+    this.master.connect(this.fx.input);
+    this.limiter.connect(this.analyser).connect(this.watchAnalyser).connect(this.ctx.destination);
     this.decks = Array.from({ length: n }, (_, i) => new Deck(this.ctx, this.master, i));
     this.levelBuf = new Float32Array(this.analyser.fftSize);
+    this.watchBuf = new Float32Array(this.watchAnalyser.fftSize);
+  }
+
+  /**
+   * Seconds between a deck playing a sample and it reaching the master (the
+   * key-lock delay, 0 without key-lock). Beat times on the master — what the
+   * room hears — are deck times + this.
+   */
+  outputDelay = 0;
+
+  /** Turn key-lock on or off for every deck (only while stopped). Resolves to the state actually in effect. */
+  async setKeyLock(on: boolean): Promise<boolean> {
+    const ok = on && (await loadKeyLock(this.ctx));
+    for (const d of this.decks) d.setKeyLock(ok ? createKeyLock(this.ctx) : null);
+    this.outputDelay = ok ? KEYLOCK_DELAY_SAMPLES / this.ctx.sampleRate : 0;
+    return ok;
   }
 
   get now(): number {
@@ -66,6 +93,21 @@ export class AudioEngine {
     return Math.sqrt(s / this.levelBuf.length);
   }
 
+  /**
+   * Loudest master sample over the last ~0.7 s, 0..1. Used for silence
+   * detection: a short RMS window can land in the gaps between sparse hits
+   * every time it's sampled and report silence while the music plays.
+   */
+  peak(): number {
+    this.watchAnalyser.getFloatTimeDomainData(this.watchBuf);
+    let m = 0;
+    for (let i = 0; i < this.watchBuf.length; i++) {
+      const v = Math.abs(this.watchBuf[i]);
+      if (v > m) m = v;
+    }
+    return m;
+  }
+
   /** Fade the master out over `seconds`, then stop every deck. */
   async fadeOutAndStop(seconds = 2): Promise<void> {
     const t = this.now;
@@ -77,6 +119,7 @@ export class AudioEngine {
       d.stopNow();
       d.resetControls(0);
     }
+    this.fx.reset();
     this.master.gain.setValueAtTime(0.9, this.now);
   }
 

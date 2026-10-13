@@ -10,8 +10,18 @@
 //      downbeat = the beat (of 4) with the most low-band energy.
 
 import type { TrackAnalysis } from "@/lib/types";
+import { detectKey } from "./keydetect";
+import { integratedLoudness } from "./loudness";
 
 export const ANALYSIS_SAMPLE_RATE = 11025;
+/** Bump when TrackAnalysis gains fields; older results are re-analysed in the background. */
+export const ANALYSIS_VERSION = 3;
+
+/** A beat grid confirmed by the admin: skips tempo detection. */
+export interface ForcedGrid {
+  bpm: number;
+  firstBeat: number;
+}
 const HOP = 128; // ~11.6 ms at 11025 Hz
 const WINDOW = 512;
 const MIN_BPM = 85;
@@ -24,6 +34,8 @@ export interface Envelopes {
   low: Float32Array;
   /** RMS per frame (full band). */
   rms: Float32Array;
+  /** Steeper low-band (kick + bassline) energy per frame, for finding breakdowns. */
+  bass: Float32Array;
   frameRate: number;
 }
 
@@ -32,26 +44,35 @@ export function computeEnvelopes(samples: Float32Array, sampleRate: number): Env
   const rms = new Float32Array(frames);
   const low = new Float32Array(frames);
   const onset = new Float32Array(frames);
+  const bass = new Float32Array(frames);
 
-  // One-pole low-pass at ~150 Hz isolates kick drums.
+  // One-pole low-pass at ~150 Hz isolates kick drums. A second pole (12 dB/oct)
+  // gives the bass level, so pads and vocals in a breakdown don't read as bass.
   const alpha = 1 - Math.exp((-2 * Math.PI * 150) / sampleRate);
   const lowSignal = new Float32Array(samples.length);
+  const bassSignal = new Float32Array(samples.length);
   let y = 0;
+  let y2 = 0;
   for (let i = 0; i < samples.length; i++) {
     y += alpha * (samples[i] - y);
+    y2 += alpha * (y - y2);
     lowSignal[i] = y;
+    bassSignal[i] = y2;
   }
 
   for (let f = 0; f < frames; f++) {
     const start = f * HOP;
     let sum = 0;
     let lowSum = 0;
+    let bassSum = 0;
     for (let i = start; i < start + WINDOW; i++) {
       sum += samples[i] * samples[i];
       lowSum += lowSignal[i] * lowSignal[i];
+      bassSum += bassSignal[i] * bassSignal[i];
     }
     rms[f] = Math.sqrt(sum / WINDOW);
     low[f] = Math.sqrt(lowSum / WINDOW);
+    bass[f] = Math.sqrt(bassSum / WINDOW);
   }
 
   const eps = 1e-6;
@@ -64,7 +85,7 @@ export function computeEnvelopes(samples: Float32Array, sampleRate: number): Env
   const smoothed = movingAverage(onset, 32);
   for (let f = 0; f < frames; f++) onset[f] = Math.max(0, onset[f] - smoothed[f]);
 
-  return { onset, low, rms, frameRate: sampleRate / HOP };
+  return { onset, low, rms, bass, frameRate: sampleRate / HOP };
 }
 
 function movingAverage(x: Float32Array, radius: number): Float32Array {
@@ -242,32 +263,47 @@ function median(values: number[]): number {
 
 /**
  * Full analysis of a mono signal. `tagBpm` (from file tags) is used when the
- * detector's confidence is low and the tag is plausible.
+ * detector's confidence is low and the tag is plausible. A `forced` grid (an
+ * admin fix) replaces tempo and downbeat detection.
  */
-export function analyzeSamples(samples: Float32Array, sampleRate: number, tagBpm: number | null = null): TrackAnalysis {
+export function analyzeSamples(
+  samples: Float32Array,
+  sampleRate: number,
+  tagBpm: number | null = null,
+  forced: ForcedGrid | null = null,
+): TrackAnalysis {
   const duration = samples.length / sampleRate;
   const env = computeEnvelopes(samples, sampleRate);
-  const { onset, low, rms, frameRate } = env;
+  const { onset, low, rms, bass, frameRate } = env;
 
-  let bpm = coarseTempo(onset, frameRate);
-  while (bpm < MIN_BPM) bpm *= 2;
-  while (bpm > MAX_BPM) bpm /= 2;
-  let refined = refineTempo(onset, frameRate, bpm);
+  let refined: { bpm: number; phase: number; confidence: number };
+  let period: number;
+  let firstBeat: number;
+  if (forced) {
+    refined = { bpm: forced.bpm, phase: 0, confidence: 1 };
+    period = (60 * frameRate) / forced.bpm;
+    firstBeat = Math.max(0, forced.firstBeat);
+  } else {
+    let bpm = coarseTempo(onset, frameRate);
+    while (bpm < MIN_BPM) bpm *= 2;
+    while (bpm > MAX_BPM) bpm /= 2;
+    refined = refineTempo(onset, frameRate, bpm);
 
-  if (tagBpm && tagBpm >= 60 && tagBpm <= 200 && refined.confidence < 0.25) {
-    const fromTag = refineTempo(onset, frameRate, tagBpm);
-    if (fromTag.confidence >= refined.confidence * 0.8) refined = fromTag;
+    if (tagBpm && tagBpm >= 60 && tagBpm <= 200 && refined.confidence < 0.25) {
+      const fromTag = refineTempo(onset, frameRate, tagBpm);
+      if (fromTag.confidence >= refined.confidence * 0.8) refined = fromTag;
+    }
+
+    const grid = fitGrid(onset, (60 * frameRate) / refined.bpm, refined.phase);
+    period = grid.period;
+    refined = { ...refined, bpm: Math.round(((60 * frameRate) / period) * 1000) / 1000 };
+    const beatIdx = downbeatOffset(low, period, grid.phase);
+    // Frame f covers samples [f*HOP, f*HOP+WINDOW) and its energy rises once a
+    // transient is well inside the window, so the onset frame lags the true
+    // attack by ~3/4 of a window (measured on synthetic kicks).
+    const latency = (0.75 * WINDOW) / sampleRate;
+    firstBeat = Math.max(0, (grid.phase + beatIdx * period) / frameRate + latency);
   }
-
-  const grid = fitGrid(onset, (60 * frameRate) / refined.bpm, refined.phase);
-  const period = grid.period;
-  refined = { ...refined, bpm: Math.round(((60 * frameRate) / period) * 1000) / 1000 };
-  const beatIdx = downbeatOffset(low, period, grid.phase);
-  // Frame f covers samples [f*HOP, f*HOP+WINDOW) and its energy rises once a
-  // transient is well inside the window, so the onset frame lags the true
-  // attack by ~3/4 of a window (measured on synthetic kicks).
-  const latency = (0.75 * WINDOW) / sampleRate;
-  const firstBeat = Math.max(0, (grid.phase + beatIdx * period) / frameRate + latency);
 
   // Energy: loudness (dBFS mapped −24..−8) blended with onset density.
   let sumSq = 0;
@@ -279,24 +315,35 @@ export function analyzeSamples(samples: Float32Array, sampleRate: number, tagBpm
   const density = Math.max(0, Math.min(1, (onsetSum / Math.max(1, onset.length)) * 12));
   const energy = Math.round((0.7 * loud + 0.3 * density) * 100) / 100;
 
-  // Intro / outro from per-bar RMS.
+  // Intro / outro from per-bar RMS; breakdowns and drops from per-bar bass.
   const barFrames = period * 4;
   const startFrame = firstBeat * frameRate;
-  const barLevels: number[] = [];
+  const barRms: number[] = [];
+  const barBass: number[] = [];
   for (let b = startFrame; b + barFrames <= rms.length; b += barFrames) {
     let s = 0;
+    let sb = 0;
     let n = 0;
-    for (let f = Math.floor(b); f < Math.floor(b + barFrames); f++, n++) s += rms[f];
-    barLevels.push(s / Math.max(1, n));
+    for (let f = Math.floor(b); f < Math.floor(b + barFrames); f++, n++) {
+      s += rms[f];
+      sb += bass[f];
+    }
+    barRms.push(s / Math.max(1, n));
+    barBass.push(sb / Math.max(1, n));
   }
-  const med = median(barLevels);
+  // Scale bass so the track's loud bars (90th percentile) read as 1.
+  const bassRef = [...barBass].sort((x, y) => x - y)[Math.floor(barBass.length * 0.9)] || 1;
+  const barLevels = barBass.map((v) => Math.round(Math.min(1, v / bassRef) * 100) / 100);
+  const med = median(barRms);
   const barSec = (60 / refined.bpm) * 4;
   let introBars = 0;
-  while (introBars < barLevels.length && barLevels[introBars] < 0.8 * med) introBars++;
-  let lastFull = barLevels.length - 1;
-  while (lastFull > 0 && barLevels[lastFull] < 0.8 * med) lastFull--;
+  while (introBars < barRms.length && barRms[introBars] < 0.8 * med) introBars++;
+  let lastFull = barRms.length - 1;
+  while (lastFull > 0 && barRms[lastFull] < 0.8 * med) lastFull--;
   const introEnd = Math.min(duration, firstBeat + introBars * barSec);
   const outroStart = Math.min(duration, firstBeat + (lastFull + 1) * barSec);
+
+  const key = detectKey(samples, sampleRate);
 
   return {
     bpm: refined.bpm,
@@ -306,6 +353,11 @@ export function analyzeSamples(samples: Float32Array, sampleRate: number, tagBpm
     duration: Math.round(duration * 1000) / 1000,
     introEnd: Math.round(introEnd * 1000) / 1000,
     outroStart: Math.round(outroStart * 1000) / 1000,
+    barLevels,
+    version: ANALYSIS_VERSION,
+    loudness: integratedLoudness(samples, sampleRate),
+    detectedKey: key?.camelot ?? null,
+    keyConfidence: key?.confidence ?? 0,
   };
 }
 

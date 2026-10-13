@@ -1,6 +1,7 @@
 // The auto-DJ: picks every track, schedules every transition and recovers from
-// failures with no human input. Staff only pick a mood and press play/stop.
-// Client-only (owns the AudioEngine).
+// failures with no human input. Staff pick the mood and press play/stop, and
+// may also press Drop, fire an effect, or request tracks; the auto-DJ still
+// beat-matches and times every request to the mood. Client-only (owns the AudioEngine).
 //
 // Timing model: all audio events are scheduled ahead on the AudioContext
 // clock (sample-accurate). JS timers are only used to *plan* the next step
@@ -9,17 +10,36 @@
 
 import { AudioEngine } from "@/lib/audio/engine";
 import type { Deck } from "@/lib/audio/deck";
-import { blend, cut, echoOut, filterSweep, type TransitionPlan } from "@/lib/audio/transitions";
+import type { FxKind } from "@/lib/audio/fx";
+import { libraryLoudness } from "@/lib/analysis/loudness";
+import { blend, cut, dropIn, echoOut, filterSweep, type TransitionPlan } from "@/lib/audio/transitions";
 import type { Mood, MoodId, Track, TransitionKind } from "@/lib/types";
 import { getMood, targetEnergy } from "./moods";
-import { cueIn, mixOutPoint, nextDownbeat } from "./mixpoints";
-import { chooseTransition, isMoodJump, pickNext, type SelectionContext } from "./selector";
+import { drops } from "@/lib/analysis/structure";
+import { barSeconds, BEATS_PER_BAR, cueIn, dropBuildBars, dropCue, mixOutPoint, nextBoundary, nextDownbeat } from "./mixpoints";
+import {
+  chooseTransition,
+  isMoodJump,
+  MAX_SYNC_DELTA,
+  MIN_BLEND_CONFIDENCE,
+  pickNext,
+  rankForRequest,
+  type RequestOption,
+  type SelectionContext,
+} from "./selector";
 
+/** Stop fades the whole mix out over this many seconds. */
+export const STOP_FADE_SECONDS = 2;
 /** Seconds of lead time we need to schedule a transition safely. */
-const SCHEDULE_MARGIN = 2;
+export const SCHEDULE_MARGIN = 2;
+/** A Drop lands on the next boundary of this many bars, so it stays in phrase. */
+const DROP_BOUNDARY_BARS = 4;
+/** The incoming track rises in over at least / at most this many bars before its drop. */
+const MIN_DROP_BUILD_BARS = 2;
+const MAX_DROP_BUILD_BARS = 8;
 /** Bars over which an incoming deck's tempo glides back to its native rate. */
 const TEMPO_HANDBACK_BARS = 16;
-/** Master level below this for SILENCE_SECONDS triggers recovery. */
+/** Master peak below this for SILENCE_SECONDS triggers recovery. */
 const SILENCE_LEVEL = 0.0005;
 const SILENCE_SECONDS = 2;
 const START_GRACE_SECONDS = 6;
@@ -37,6 +57,13 @@ export interface UpNext {
   transition: TransitionKind;
   /** Context time the transition starts. */
   at: number;
+  /** Staff chose this track. */
+  requested: boolean;
+}
+
+export interface Standby {
+  track: Track;
+  deck: number;
 }
 
 export interface AutoDJStatus {
@@ -44,9 +71,36 @@ export interface AutoDJStatus {
   mood: MoodId;
   now: NowPlaying | null;
   next: UpNext | null;
+  standby: Standby | null;
+  /** Tracks staff requested, in the order they'll play (after `next`). */
+  queue: Track[];
   note: string | null;
   error: string | null;
   deckCount: number;
+}
+
+/** What one deck is doing right now, read every animation frame by the booth display. */
+export interface DeckView {
+  /** False while the deck is cued for a scheduled start. */
+  started: boolean;
+  /** Track position (s). */
+  position: number;
+  /** Current playback rate (1 = native tempo). */
+  rate: number;
+  /** Current fader level, 0..1. */
+  fader: number;
+  /** Current low-EQ gain in dB (0 = full bass, EQ_KILL_DB = killed). */
+  bassDb: number;
+}
+
+export interface BoothSnapshot {
+  /** AudioContext time. */
+  now: number;
+  decks: (DeckView | null)[];
+  /** The planned transition, in context time (`drop`: when a Drop hits). */
+  mix: { start: number; end: number; drop?: number } | null;
+  /** Track position on the live deck where the next transition starts. */
+  mixOutPosition: number | null;
 }
 
 export interface AutoDJDeps {
@@ -54,6 +108,10 @@ export interface AutoDJDeps {
   getFile: (track: Track) => Promise<File>;
   onTrackError: (trackId: string, message: string) => void;
   onStatus: (status: AutoDJStatus) => void;
+  /** The mood preset with the admin's edits (default: the built-in preset). Read fresh at every decision. */
+  resolveMood?: (id: MoodId) => Mood;
+  /** A track started playing (for the set log). */
+  onPlayed?: (track: Track, how: TransitionKind | "start" | "recovery", requested: boolean, mood: MoodId) => void;
 }
 
 interface Planned {
@@ -61,12 +119,21 @@ interface Planned {
   track: Track;
   plan: TransitionPlan;
   timer: ReturnType<typeof setTimeout>;
+  requested: boolean;
+  /** Staff pressed Drop for this one (an automatic drop swap can still be pulled forward). */
+  staffDrop: boolean;
+}
+
+interface Loaded {
+  track: Track;
+  buffer: AudioBuffer;
+  requested: boolean;
 }
 
 export class AutoDJ {
   readonly engine: AudioEngine;
   private readonly deps: AutoDJDeps;
-  private mood: Mood;
+  private moodKey: MoodId;
   private playing = false;
   private current: { deck: Deck; track: Track; startedAt: number } | null = null;
   private planned: Planned | null = null;
@@ -81,14 +148,23 @@ export class AutoDJ {
   private failed = new Set<string>();
   /** Bumped whenever in-flight async planning must be discarded. */
   private generation = 0;
+  /** Staff pressed Drop and the next transition hasn't been scheduled as one yet. */
+  private dropRequested = false;
+  /** Tracks staff requested; they play before the auto-DJ's own picks. */
+  private requests: Track[] = [];
   private planning = false;
   private recovering = false;
   private watchdog: ReturnType<typeof setInterval> | null = null;
   private silentSince: number | null = null;
 
-  constructor(deckCount: number, mood: MoodId, deps: AutoDJDeps) {
+  /** Key-lock was requested for this engine (it may still be unavailable). */
+  readonly keyLock: boolean;
+  private keyLockReady = false;
+
+  constructor(deckCount: number, mood: MoodId, deps: AutoDJDeps, keyLock = false) {
     this.engine = new AudioEngine(deckCount);
-    this.mood = getMood(mood);
+    this.keyLock = keyLock;
+    this.moodKey = mood;
     this.deps = deps;
     for (const deck of this.engine.decks) {
       deck.onUnexpectedEnd = (d) => {
@@ -101,6 +177,11 @@ export class AutoDJ {
     return this.playing;
   }
 
+  /** The current mood, with any edits the admin made on the Moods page (even mid-set). */
+  private get mood(): Mood {
+    return this.deps.resolveMood?.(this.moodKey) ?? getMood(this.moodKey);
+  }
+
   get moodId(): MoodId {
     return this.mood.id;
   }
@@ -110,24 +191,30 @@ export class AutoDJ {
   async start(): Promise<void> {
     if (this.playing) return;
     await this.engine.resume();
+    if (this.keyLock && !this.keyLockReady) {
+      this.keyLockReady = await this.engine.setKeyLock(true);
+      if (!this.keyLockReady) this.note = "Key lock isn't available in this browser — tempo changes shift pitch";
+    }
     this.playing = true;
     this.error = null;
     this.generation++;
     const gen = this.generation;
-    const first = await this.loadNextTrack(this.selectionContext(), new Set());
+    const first = await this.loadNextTrack(this.selectionContext(), new Set(), true);
     if (!first || gen !== this.generation) {
+      if (first?.requested) this.requests.unshift(first.track);
       this.playing = false;
       this.error = first ? null : "No analysed tracks fit. Add music in the Library page.";
       this.emit();
       return;
     }
     const deck = this.engine.decks[0];
-    deck.load(first.track, first.buffer);
+    deck.load(first.track, first.buffer, this.loudnessTarget());
     deck.resetControls(1);
     const when = this.engine.now + 0.1;
     deck.start(when, 0, 1);
     this.current = { deck, track: first.track, startedAt: when };
     this.remember(first.track);
+    this.deps.onPlayed?.(first.track, "start", first.requested, this.mood.id);
     this.startWatchdog();
     this.emit();
     void this.planNext();
@@ -139,7 +226,8 @@ export class AutoDJ {
     this.generation++;
     this.cancelPlanned();
     this.stopWatchdog();
-    await this.engine.fadeOutAndStop(2);
+    this.dropRequested = false;
+    await this.engine.fadeOutAndStop(STOP_FADE_SECONDS);
     for (const d of this.engine.decks) d.unload();
     this.current = null;
     this.standby = null;
@@ -149,8 +237,8 @@ export class AutoDJ {
 
   /** Staff changed the mood. The music never cuts; the engine steers toward it. */
   setMood(id: MoodId): void {
-    if (id === this.mood.id) return;
-    this.mood = getMood(id);
+    if (id === this.moodKey) return;
+    this.moodKey = id;
     this.moodTrackIndex = 0;
     if (!this.playing || !this.current) {
       this.emit();
@@ -171,6 +259,92 @@ export class AutoDJ {
     this.emit();
   }
 
+  /**
+   * Staff pressed Drop: on the next 4-bar boundary, the next track comes in
+   * straight on its drop instead of waiting for the planned mix. Reuses the
+   * already-decoded next track. Ignored (returns false) once a transition is
+   * running or about to start.
+   */
+  drop(): boolean {
+    if (!this.playing || !this.current || this.recovering) return false;
+    const p = this.planned;
+    if (p && p.plan.start <= this.engine.now + SCHEDULE_MARGIN) return false;
+    if (p?.staffDrop) return true;
+    this.dropRequested = true;
+    if (p?.deck.buffer) {
+      const { track, deck, requested } = p;
+      const buffer = deck.buffer!;
+      clearTimeout(p.timer);
+      deck.stopNow();
+      deck.resetControls(0);
+      this.planned = null;
+      // The planned mix hasn't started: drop its automation, keep the music at full level.
+      this.current.deck.resetControls(1);
+      this.schedule(track, buffer, requested);
+    } else {
+      // Still choosing / decoding: schedule() picks the request up.
+      void this.planNext();
+    }
+    return true;
+  }
+
+  /**
+   * Staff chose a track. `next`: it replaces the cued track (if that mix hasn't
+   * started; otherwise it plays right after). Else it joins the end of the
+   * queue. The auto-DJ still picks the transition, syncs the tempo and times
+   * the mix for the mood, and steers back into the mood afterwards.
+   */
+  request(track: Track, next: boolean): void {
+    if (track.status !== "ready" || !track.analysis || track.id === this.current?.track.id) return;
+    this.requests = this.requests.filter((t) => t.id !== track.id);
+    const p = this.planned;
+    if (next && p && p.track.id !== track.id && this.playing && p.plan.start > this.engine.now + SCHEDULE_MARGIN) {
+      const wasDrop = p.staffDrop;
+      this.cancelPlanned();
+      this.requests.unshift(track);
+      this.dropRequested ||= wasDrop;
+      void this.planNext();
+    } else if (p?.track.id !== track.id) {
+      if (next) this.requests.unshift(track);
+      else this.requests.push(track);
+      if (this.playing && !p) void this.planNext();
+    }
+    this.emit();
+  }
+
+  /** Remove a track from the request queue. */
+  unrequest(trackId: string): void {
+    this.requests = this.requests.filter((t) => t.id !== trackId);
+    this.emit();
+  }
+
+  /**
+   * Every playable track for the staff picker, best fit for the mood and the
+   * playing track first — minus the cued next track and anything already queued.
+   */
+  rankTracks(tracks: Track[]): RequestOption[] {
+    const taken = new Set([this.planned?.track.id, ...this.requests.map((t) => t.id)]);
+    return rankForRequest(tracks, this.selectionContext()).filter((o) => !taken.has(o.track.id));
+  }
+
+  /**
+   * Staff fired an effect on the whole mix. It starts on the live deck's next
+   * beat (the riser on the next downbeat, so it ends on one) and is scheduled
+   * on the audio clock like everything else.
+   */
+  fx(kind: FxKind): void {
+    const c = this.current;
+    const a = c?.track.analysis;
+    const tl = c?.deck.timeline;
+    if (!this.playing || !a || !tl) return;
+    // Effects act on the master, which hears each deck `outputDelay` late.
+    const delay = this.engine.outputDelay;
+    const pos = tl.positionAt(this.engine.now + 0.05 - delay);
+    const target = nextBoundary(a, pos, kind === "riser" ? 1 : 1 / BEATS_PER_BAR);
+    const t = tl.timeAt(target);
+    this.engine.fx.trigger(kind, t + delay, 60 / (a.bpm * tl.rateAt(t)));
+  }
+
   async dispose(): Promise<void> {
     await this.stop();
     await this.engine.close();
@@ -182,6 +356,11 @@ export class AutoDJ {
     const c = this.current;
     if (!c?.track.analysis || !c.deck.timeline) return null;
     return c.track.analysis.bpm * c.deck.timeline.rateAt(this.engine.now);
+  }
+
+  /** Every track is volume-matched to the library's typical loudness. */
+  private loudnessTarget(): number {
+    return libraryLoudness(this.deps.getTracks().map((t) => t.analysis?.loudness));
   }
 
   private selectionContext(): SelectionContext {
@@ -196,24 +375,40 @@ export class AutoDJ {
     };
   }
 
-  /** Pick + decode the next track, skipping files that fail to decode. */
-  private async loadNextTrack(ctx: SelectionContext, exclude: Set<string>): Promise<{ track: Track; buffer: AudioBuffer } | null> {
-    const skip = new Set([...exclude, ...this.failed]);
+  /**
+   * Pick + decode the next track, skipping files that fail to decode. With
+   * `useRequests`, staff requests come first (taken off the queue); the
+   * auto-DJ's own picks never choose a track that is waiting in the queue.
+   */
+  private async loadNextTrack(ctx: SelectionContext, exclude: Set<string>, useRequests = false): Promise<Loaded | null> {
+    const skip = new Set([...exclude, ...this.failed, ...this.requests.map((t) => t.id)]);
+    while (useRequests && this.requests.length > 0) {
+      const track = this.requests.shift()!;
+      if (this.failed.has(track.id) || exclude.has(track.id) || track.id === this.current?.track.id) continue;
+      const buffer = await this.decodeTrack(track);
+      if (buffer) return { track, buffer, requested: true };
+    }
     for (let attempt = 0; attempt < 5; attempt++) {
       const track = pickNext(this.deps.getTracks(), ctx, skip);
       if (!track) return null;
-      try {
-        const file = await this.deps.getFile(track);
-        const buffer = await this.engine.decode(file);
-        return { track, buffer };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Could not decode file";
-        this.failed.add(track.id);
-        skip.add(track.id);
-        this.deps.onTrackError(track.id, message);
-      }
+      const buffer = await this.decodeTrack(track);
+      if (buffer) return { track, buffer, requested: false };
+      skip.add(track.id);
     }
     return null;
+  }
+
+  /** Decode a track for playback; on failure flag it and return null. */
+  private async decodeTrack(track: Track): Promise<AudioBuffer | null> {
+    try {
+      const file = await this.deps.getFile(track);
+      return await this.engine.decode(file);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not decode file";
+      this.failed.add(track.id);
+      this.deps.onTrackError(track.id, message);
+      return null;
+    }
   }
 
   private async planNext(): Promise<void> {
@@ -222,21 +417,24 @@ export class AutoDJ {
     const gen = this.generation;
     try {
       const exclude = new Set<string>(this.standby ? [this.standby.track.id] : []);
-      const loaded = await this.loadNextTrack(this.selectionContext(), exclude);
-      if (gen !== this.generation || !this.playing || !this.current || this.planned) return;
+      const loaded = await this.loadNextTrack(this.selectionContext(), exclude, true);
+      if (gen !== this.generation || !this.playing || !this.current || this.planned) {
+        if (loaded?.requested) this.requests.unshift(loaded.track);
+        return;
+      }
       if (!loaded) {
         this.note = "Not enough playable tracks — add more music";
         this.emit();
         return;
       }
-      this.schedule(loaded.track, loaded.buffer);
+      this.schedule(loaded.track, loaded.buffer, loaded.requested);
       void this.prepareStandby();
     } finally {
       this.planning = false;
     }
   }
 
-  private schedule(track: Track, buffer: AudioBuffer): void {
+  private schedule(track: Track, buffer: AudioBuffer, requested = false): void {
     const cur = this.current!;
     const a = cur.track.analysis!;
     const b = track.analysis!;
@@ -244,10 +442,22 @@ export class AutoDJ {
     const now = this.engine.now;
 
     const curBpm = a.bpm * tl.rateAt(now);
-    const kind = chooseTransition(cur.track, track, curBpm, this.jump);
-    const bars = kind === "blend" ? this.mood.blendBars : 8;
+    const drop = this.dropRequested;
+    this.dropRequested = false;
+    const planned: TransitionKind = drop ? "drop" : chooseTransition(cur.track, track, curBpm, this.jump);
+    const bars = planned === "blend" ? this.mood.blendBars : 8;
+    // Bars from the transition's start to its hand-over, which should land
+    // where the outgoing track breaks down: a blend's bass swap is halfway,
+    // a filter sweep's crossover about halfway, an echo-out or cut at once.
+    const leadBars = planned === "blend" ? Math.floor(bars / 2) : planned === "filterSweep" ? 4 : 0;
+    // Peak-time moods swap onto the next track's drop where a blend would have
+    // swapped basslines — only when the blend could beat-match and a drop exists.
+    const autoSwap = planned === "blend" && this.mood.dropSwap && !!b.barLevels && drops(b.barLevels, b.fullLevel).length > 0;
+    const kind: TransitionKind = autoSwap ? "drop" : planned;
 
-    let mixPos = mixOutPoint(a, bars, tl.positionAt(now + SCHEDULE_MARGIN));
+    let mixPos = drop
+      ? nextBoundary(a, tl.positionAt(now + SCHEDULE_MARGIN), DROP_BOUNDARY_BARS)
+      : mixOutPoint(a, bars, tl.positionAt(now + SCHEDULE_MARGIN), this.mood, leadBars);
     let t = tl.timeAt(mixPos);
     if (t < now + 1) {
       mixPos = nextDownbeat(a, tl.positionAt(now + SCHEDULE_MARGIN));
@@ -256,13 +466,15 @@ export class AutoDJ {
 
     const inc = this.engine.freeDeck([cur.deck, ...(this.standby ? [this.standby.deck] : [])]);
     if (!inc) return;
-    inc.load(track, buffer);
+    inc.load(track, buffer, this.loudnessTarget());
 
     const outBpmAtT = a.bpm * tl.rateAt(t);
     const outBeat = 60 / outBpmAtT;
-    const synced = kind === "blend" || kind === "filterSweep";
+    // A drop keeps the tempo when it's close enough to sync; otherwise it lands at its own tempo.
+    const synced = kind === "blend" || kind === "filterSweep" || (kind === "drop" && Math.abs(outBpmAtT / b.bpm - 1) <= MAX_SYNC_DELTA);
     const rate = synced ? outBpmAtT / b.bpm : 1;
 
+    let offset = cueIn(b);
     let plan: TransitionPlan;
     switch (kind) {
       case "blend":
@@ -274,11 +486,36 @@ export class AutoDJ {
       case "echoOut":
         plan = echoOut(cur.deck, inc, t, outBeat);
         break;
+      case "drop": {
+        // Land the incoming drop on a 4-bar boundary far enough ahead for a
+        // build-up; start the incoming track that many bars before its drop.
+        const cue = dropCue(b);
+        const outBar = 4 * outBeat;
+        const canBuild = synced && a.beatConfidence >= MIN_BLEND_CONFIDENCE && b.beatConfidence >= MIN_BLEND_CONFIDENCE;
+        let land = t;
+        let build = 0;
+        if (canBuild) {
+          land = autoSwap
+            ? // On the breakdown the blend's bass swap was aimed at.
+              tl.timeAt(mixPos + leadBars * barSeconds(a))
+            : tl.timeAt(nextBoundary(a, tl.positionAt(now + SCHEDULE_MARGIN + MIN_DROP_BUILD_BARS * outBar), DROP_BOUNDARY_BARS));
+          build = dropBuildBars(land - (now + SCHEDULE_MARGIN), outBar, cue, rate, MAX_DROP_BUILD_BARS);
+        }
+        // outBar × rate is one incoming bar, so the offset stays on the incoming grid.
+        offset = cue - build * outBar * rate;
+        plan = dropIn(cur.deck, inc, land - build * outBar, land, outBeat);
+        break;
+      }
       default:
         plan = cut(cur.deck, inc, t);
     }
 
-    inc.start(plan.start, cueIn(b), rate);
+    inc.start(plan.start, offset, rate);
+    // A staff Drop gets a noise riser that peaks exactly as the drop hits.
+    if (drop && plan.drop !== undefined && plan.drop - plan.start > 1) {
+      const delay = this.engine.outputDelay;
+      this.engine.fx.riserBetween(plan.start + delay, plan.drop + delay);
+    }
     if (synced && Math.abs(rate - 1) > 0.001) {
       const handBack = TEMPO_HANDBACK_BARS * 4 * (60 / outBpmAtT);
       inc.rampRate(plan.end, plan.end + handBack, 1);
@@ -286,7 +523,7 @@ export class AutoDJ {
     // The outgoing deck is silent from plan.end; handover() stops and unloads it.
 
     const timer = setTimeout(() => this.handover(), Math.max(0, (plan.end - this.engine.now) * 1000) + 60);
-    this.planned = { deck: inc, track, plan, timer };
+    this.planned = { deck: inc, track, plan, timer, requested, staffDrop: drop };
     this.emit();
   }
 
@@ -299,9 +536,17 @@ export class AutoDJ {
       prev.deck.resetControls(0);
       prev.deck.unload();
     }
+    // Drops and filter sweeps leave the incoming filter at an inaudible extreme.
+    p.deck.clearFilter();
     this.current = { deck: p.deck, track: p.track, startedAt: p.plan.start };
     this.remember(p.track);
+    this.deps.onPlayed?.(p.track, p.plan.kind, p.requested, this.mood.id);
     if (this.jump) this.jump = false;
+    // After a staff request outside the mood's tempo, steer the next pick back into the mood.
+    if (p.requested && isMoodJump(this.currentBpm(), this.mood)) {
+      this.jump = true;
+      this.note = `Back to ${this.mood.name} after this request`;
+    }
     if (this.moodTracksLeft > 0 && --this.moodTracksLeft === 0) this.note = null;
     this.emit();
     void this.planNext();
@@ -314,6 +559,9 @@ export class AutoDJ {
     p.deck.unload();
     p.deck.resetControls(0);
     this.planned = null;
+    // A re-plan must not lose a staff request, nor keep a riser aimed at the old drop.
+    if (p.requested) this.requests.unshift(p.track);
+    if (p.plan.kind === "drop") this.engine.fx.stopRiser();
     // Only called before the transition starts: drop the outgoing deck's
     // scheduled automation and keep it playing at full level.
     this.current?.deck.resetControls(1);
@@ -339,8 +587,9 @@ export class AutoDJ {
     const used = [this.current?.deck, this.planned?.deck].filter((d): d is Deck => !!d);
     const deck = this.engine.freeDeck(used);
     if (!deck) return;
-    deck.load(loaded.track, loaded.buffer);
+    deck.load(loaded.track, loaded.buffer, this.loudnessTarget());
     this.standby = { deck, track: loaded.track };
+    this.emit();
   }
 
   private dropStandby(): void {
@@ -357,7 +606,7 @@ export class AutoDJ {
       if (!this.playing || this.recovering || !this.current) return;
       const now = this.engine.now;
       if (now - this.current.startedAt < START_GRACE_SECONDS) return;
-      if (this.engine.level() < SILENCE_LEVEL) {
+      if (this.engine.peak() < SILENCE_LEVEL) {
         this.silentSince ??= now;
         if (now - this.silentSince > SILENCE_SECONDS) void this.recover("silence detected");
       } else {
@@ -381,17 +630,18 @@ export class AutoDJ {
       if (this.planned) {
         clearTimeout(this.planned.timer);
         this.planned.deck.unload();
+        if (this.planned.requested) this.requests.unshift(this.planned.track);
         this.planned = null;
       }
-      let next: { track: Track; buffer: AudioBuffer } | null = null;
+      let next: Loaded | null = null;
       let deck: Deck | null = null;
       if (this.standby?.deck.buffer) {
-        next = { track: this.standby.track, buffer: this.standby.deck.buffer };
+        next = { track: this.standby.track, buffer: this.standby.deck.buffer, requested: false };
         deck = this.standby.deck;
         this.standby = null;
       } else {
         const exclude = new Set(this.current ? [this.current.track.id] : []);
-        next = await this.loadNextTrack(this.selectionContext(), exclude);
+        next = await this.loadNextTrack(this.selectionContext(), exclude, true);
       }
       if (gen !== this.generation || !this.playing) return;
       if (!next) {
@@ -406,12 +656,13 @@ export class AutoDJ {
         }
       }
       deck ??= this.engine.decks[0];
-      if (!deck.buffer) deck.load(next.track, next.buffer);
+      if (!deck.buffer) deck.load(next.track, next.buffer, this.loudnessTarget());
       deck.resetControls(1);
       const when = this.engine.now + 0.05;
       deck.start(when, cueIn(next.track.analysis!), 1);
       this.current = { deck, track: next.track, startedAt: when };
       this.remember(next.track);
+      this.deps.onPlayed?.(next.track, "recovery", next.requested, this.mood.id);
       this.silentSince = null;
       this.note = `Recovered automatically (${reason})`;
       this.emit();
@@ -422,6 +673,30 @@ export class AutoDJ {
   }
 
   // ── Status ──────────────────────────────────────────────────────────────────
+
+  /** Live, read-only view of the decks for the booth display. Never changes the mix. */
+  snapshot(): BoothSnapshot {
+    // What the room hears now: deck times lag the master by the key-lock delay.
+    const now = this.engine.now - this.engine.outputDelay;
+    const p = this.planned;
+    const liveTl = this.current?.deck.timeline;
+    return {
+      now,
+      decks: this.engine.decks.map((d) =>
+        d.track && d.timeline
+          ? {
+              started: now >= d.timeline.startTime,
+              position: d.timeline.positionAt(now),
+              rate: d.timeline.rateAt(now),
+              fader: d.fader.gain.value,
+              bassDb: d.low.gain.value,
+            }
+          : null,
+      ),
+      mix: p ? { start: p.plan.start, end: p.plan.end, drop: p.plan.drop } : null,
+      mixOutPosition: p && liveTl ? liveTl.positionAt(p.plan.start) : null,
+    };
+  }
 
   private emit(): void {
     const c = this.current;
@@ -437,7 +712,9 @@ export class AutoDJ {
             startedAt: c.startedAt,
           }
         : null,
-      next: p ? { track: p.track, deck: p.deck.index, transition: p.plan.kind, at: p.plan.start } : null,
+      next: p ? { track: p.track, deck: p.deck.index, transition: p.plan.kind, at: p.plan.start, requested: p.requested } : null,
+      queue: [...this.requests],
+      standby: this.standby ? { track: this.standby.track, deck: this.standby.deck.index } : null,
       note: this.note,
       error: this.error,
       deckCount: this.engine.decks.length,

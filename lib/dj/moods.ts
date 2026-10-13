@@ -2,6 +2,11 @@ import type { Mood, MoodId } from "@/lib/types";
 
 // Mood presets are the only "input" the auto-DJ gets once the night starts.
 // Tune them here; the selector reads nothing else about intent.
+//
+// How long a track plays: like a club DJ, the auto-DJ leaves a track when it
+// breaks down after its main drop (`mixOutAfterDrops`), not at the end of the
+// file. Chill and Afterhours let tracks run through a second drop. Peak Hour
+// swaps straight onto the next track's drop (`dropSwap`) instead of blending.
 export const MOODS: Mood[] = [
   {
     id: "chill",
@@ -11,6 +16,9 @@ export const MOODS: Mood[] = [
     energy: [0.15, 0.45],
     genres: ["chill", "chillout", "downtempo", "lounge", "deep house", "ambient", "lofi"],
     blendBars: 32,
+    mixOutAfterDrops: 2,
+    maxPlayBars: 128,
+    dropSwap: false,
   },
   {
     id: "warmup",
@@ -20,6 +28,9 @@ export const MOODS: Mood[] = [
     energy: [0.3, 0.6],
     genres: ["deep house", "house", "nu disco", "indie dance", "organic house"],
     blendBars: 32,
+    mixOutAfterDrops: 1,
+    maxPlayBars: 128,
+    dropSwap: false,
   },
   {
     id: "groove",
@@ -29,6 +40,9 @@ export const MOODS: Mood[] = [
     energy: [0.45, 0.75],
     genres: ["house", "tech house", "disco", "funky house", "afro house"],
     blendBars: 16,
+    mixOutAfterDrops: 1,
+    maxPlayBars: 112,
+    dropSwap: false,
   },
   {
     id: "peak",
@@ -38,6 +52,9 @@ export const MOODS: Mood[] = [
     energy: [0.7, 1],
     genres: ["tech house", "techno", "electro", "big room", "edm", "bass house"],
     blendBars: 16,
+    mixOutAfterDrops: 1,
+    maxPlayBars: 96,
+    dropSwap: true,
   },
   {
     id: "afterhours",
@@ -47,10 +64,43 @@ export const MOODS: Mood[] = [
     energy: [0.5, 0.8],
     genres: ["minimal", "deep tech", "progressive", "melodic techno", "techno"],
     blendBars: 32,
+    mixOutAfterDrops: 2,
+    maxPlayBars: 160,
+    dropSwap: false,
   },
 ];
 
 export const DEFAULT_MOOD: MoodId = "warmup";
+
+/** Admin edits to the presets (Moods page), stored with the settings. */
+export type MoodOverrides = Partial<Record<MoodId, Partial<Omit<Mood, "id">>>>;
+
+/** A preset with the admin's edits applied. */
+export function resolveMood(id: MoodId, overrides: MoodOverrides = {}): Mood {
+  return { ...getMood(id), ...overrides[id], id };
+}
+
+export function resolveMoods(overrides: MoodOverrides = {}): Mood[] {
+  return MOODS.map((m) => resolveMood(m.id, overrides));
+}
+
+export const BLEND_BAR_OPTIONS = [8, 16, 32, 64] as const;
+
+/** Problems with an edited mood, as messages for the editor (empty = valid). */
+export function validateMood(m: Mood): string[] {
+  const errors: string[] = [];
+  const [lo, hi] = m.bpm;
+  if (!(lo >= 60 && hi <= 200 && lo < hi)) errors.push("BPM range must go from low to high, within 60–200.");
+  const [elo, ehi] = m.energy;
+  if (!(elo >= 0 && ehi <= 1 && elo < ehi)) errors.push("Energy range must go from low to high, within 0–1.");
+  if (!(BLEND_BAR_OPTIONS as readonly number[]).includes(m.blendBars)) errors.push("Blend length must be 8, 16, 32 or 64 bars.");
+  if (!(Number.isInteger(m.mixOutAfterDrops) && m.mixOutAfterDrops >= 1 && m.mixOutAfterDrops <= 4))
+    errors.push("Leave after drop 1, 2, 3 or 4.");
+  if (!(m.maxPlayBars >= 32 && m.maxPlayBars <= 512 && m.maxPlayBars % 8 === 0))
+    errors.push("Longest play must be 32–512 bars, in steps of 8.");
+  if (!m.name.trim()) errors.push("Give the mood a name.");
+  return errors;
+}
 
 export function getMood(id: MoodId): Mood {
   const mood = MOODS.find((m) => m.id === id);

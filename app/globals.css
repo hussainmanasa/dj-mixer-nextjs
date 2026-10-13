@@ -38,6 +38,16 @@ body {
   font-family: var(--font-sans);
 }
 
+/* Stop button: the ring drains over the fade-out (pathLength = 100). */
+@keyframes ring-drain {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: 100;
+  }
+}
+
 @layer components {
   .btn {
     @apply rounded-lg border border-border bg-surface-2 px-4 py-2 text-sm font-medium hover:bg-border disabled:cursor-not-allowed disabled:opacity-50;

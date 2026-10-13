@@ -20,9 +20,13 @@ Full product plan: https://claude.ai/code/artifact/903692c7-9f12-49a9-9de1-5a82b
 1. **Audio comes only from the club's own downloaded library** — a local folder opened with the File System
    Access API. Never add Spotify, Apple Music or any streaming SDK: Spotify's Developer Policy bans mixing its
    content and playing it from a business.
-2. **No human intervention in the mix.** The booth exposes only the mood picker and Play/Stop. Do not add
-   skip, lock, crossfader, energy slider or track-choice controls to the booth. Admin features live on
-   `/library` and `/moods`.
+2. **Staff steer, the auto-DJ mixes.** Owner decisions of 13 Oct 2026 allow exactly these booth actions:
+   mood picker, Play/Stop, **Drop** (bring the next track in on its drop), **effects** (Echo, Filter, Reverb,
+   Riser on the master FX chain) and **track requests** (choose the cued deck's track, or queue tracks).
+   Every action goes through `AutoDJ`: it still beat-matches, chooses the transition, times it on the grid
+   and steers back to the mood. Do not add manual decks, crossfader, per-deck EQ/faders, jog control,
+   skip/seek, energy slider or tempo controls, and never let UI write to deck automation directly.
+   Admin features live on `/library` and `/moods`.
 3. **Mood changes only when staff pick a new one.** Never switch moods on a schedule.
    A mood change must never cut the music: re-plan only transitions that haven't started; close moods ease
    over 1–3 tracks, far tempo jumps use an echo-out (`isMoodJump`).
@@ -39,34 +43,50 @@ Full product plan: https://claude.ai/code/artifact/903692c7-9f12-49a9-9de1-5a82b
 ```
 app/
   (kiosk)/booth/page.tsx      booth screen (server page → <Booth/> client component)
-  (admin)/library/page.tsx    music folder, analysis progress, deck count
-  (admin)/moods/page.tsx      read-only mood presets
+  (admin)/library/page.tsx    music folder, analysis, deck count, key lock, track table + editor
+  (admin)/moods/page.tsx      mood editor (presets + admin edits)
+  (admin)/history/page.tsx    set log by night, CSV export
   manifest.ts                 PWA manifest (kiosk install)
 components/                   UI (client components)
+  AppShell.tsx                service worker registration + offline banner (root layout)
+  booth/                      Booth.tsx (layout, Drop, queue) · DeckPanel · JogWheel · TrackOverview · FxPad ·
+                              TrackPicker · frame.ts (per-frame loop)
+  library/                    LibraryManager · TrackTable (filters, issues) · TrackEditor (flags, crates, fixes)
+  moods/MoodEditor.tsx · history/History.tsx
 lib/
   types.ts                    shared domain types — no browser APIs
   analysis/
-    bpm.ts                    PURE: tempo, beat grid, downbeat, energy, intro/outro
+    bpm.ts                    PURE: tempo, beat grid (or an admin-forced grid), energy, intro/outro, bar levels
+    structure.ts              PURE: breakdowns and drops from per-bar bass levels
+    loudness.ts               PURE: BS.1770-style integrated loudness, library target, trim
+    keydetect.ts · fft.ts     PURE: key from audio (chromagram × Krumhansl–Kessler profiles)
     key.ts                    PURE: key tag → Camelot, harmonic compatibility
     analyze.ts                client: decode at 11 025 Hz → worker
     analyze.worker.ts         Web Worker running bpm.ts
   dj/
     moods.ts                  PURE: mood presets + energy target curve
     selector.ts               PURE: score/rank tracks, choose transition type
-    mixpoints.ts              PURE: phrase-aligned mix-out / cue-in points
+    mixpoints.ts              PURE: structure-aware mix-out / cue-in points
     autodj.ts                 client: the orchestrator (plans, schedules, recovers)
   audio/
     timeline.ts               PURE: context time ↔ track position under rate ramps
-    deck.ts                   client: source → 3-band EQ → filter → fader (+ echo send)
-    engine.ts                 client: N decks → master → limiter → analyser → out
-    transitions.ts            client: blend, filterSweep, echoOut, cut automation
+    deck.ts                   client: source → trim → 3-band EQ → filter → fader → out [→ key-lock]
+    engine.ts                 client: N decks → master → effects → limiter → analysers (meter, watchdog) → out
+    transitions.ts            client: blend, filterSweep, echoOut, cut, dropIn automation
+    fx.ts                     client: staff effects on the master (echo, filter, reverb, noise riser)
+    keylock.ts                client: loads public/worklets/keylock.js (phase-vocoder pitch corrector)
   library/
     scan.ts                   client: folder walk, content hash ids, tag reading
-    store.ts                  client: IndexedDB persistence (idb-keyval)
+    store.ts                  client: IndexedDB persistence (idb-keyval): tracks, settings, session, set log
+    setlog.ts · issues.ts     PURE: nights + CSV for licence reports; library health checks
+    preview.ts                client: admin grid preview (track + metronome clicks)
 store/
   library.ts                  zustand: tracks, folder, settings, analysis queue
   session.ts                  zustand: owns the single AutoDJ, mirrors its status
 types/fs-access.d.ts          File System Access API typings
+public/sw.js                  service worker (offline app shell)
+public/worklets/keylock.js    key-lock AudioWorklet (plain JS; DSP unit-tested in lib/audio/keylock.test.ts)
+e2e/                          Playwright tests against the production build, with generated fixture tracks
 ```
 
 How a transition works: `AutoDJ.planNext()` picks the next track (`selector.ts`), decodes it, computes the
@@ -74,12 +94,102 @@ mix-out on the current track's grid (`mixpoints.ts`), converts it to context tim
 recipe (`transitions.ts`) and starts the incoming deck at `playbackRate = outgoingBpm / incomingBpm`. After the
 blend the incoming deck's rate glides back to 1.0 over 16 bars. `handover()` runs when the transition ends.
 
+How long a track plays: like a club DJ, the auto-DJ does **not** play tracks to the end. Analysis stores a bass
+level per bar (`TrackAnalysis.barLevels`); `structure.ts` turns that into sections, and a *drop* is a full
+section that returns after a breakdown. `mixOutPoint()` leaves the track when it breaks down after the mood's
+`mixOutAfterDrops`-th drop, starting the transition `leadBars` early so the hand-over (a blend's bass swap) lands
+on the breakdown. Tracks with no breakdowns leave after the mood's `maxPlayBars`; tracks with fewer drops than
+the mood wants, or analysed before `ANALYSIS_VERSION` 2, fall back to mixing out over the outro.
+Bump `ANALYSIS_VERSION` (`bpm.ts`) when `TrackAnalysis` gains fields: the Library page re-analyses older
+tracks in the background and they stay playable meanwhile.
+
+Booth display: the booth shows every deck as the auto-DJ runs it — spinning jog wheel (turns with the track
+position, so tempo sync is visible), beat ring, fader and bass meters, track overview with drops and the next
+mix point, bar/phrase counter, and a mood-coloured background that pulses on the beat. It is **display only**
+(decision 2 still holds). `useBoothFrame()` (`components/booth/frame.ts`) runs one requestAnimationFrame loop,
+reads `AutoDJ.snapshot()` once per frame and widgets write to the DOM through refs, so React never re-renders
+per frame. `AudioParam.value` gives the live, automated fader/EQ values. The beat pulse is off under
+`prefers-reduced-motion`. Play/Stop is disabled while starting ("Starting…", spinning ring) and while
+stopping ("Stopping…", ring draining over `STOP_FADE_SECONDS`); `useSession.stop()` also ignores repeat calls
+(`stopping` flag), so a double press can never re-stop or restart the set. Drop, effects and track choice are
+disabled during the fade-out.
+
+Drop button: `AutoDJ.drop()` re-plans the next transition (reusing the already-decoded next track) as a
+`"drop"` transition — a drop swap (`dropIn` in `transitions.ts`). The incoming drop (`dropCue()`: its first
+drop, else end of intro, else first downbeat) lands on the outgoing track's first 4-bar boundary at least
+`SCHEDULE_MARGIN` + 2 bars ahead (≈6–13 s at 128 BPM). The incoming deck starts 2–8 bars earlier
+(`dropBuildBars()`), beat-matched, rising under a falling high-pass with its bass killed while a rising
+high-pass thins the outgoing track and its fader eases to 70%; on the drop the incoming bass and full range
+hit together while the outgoing keeps playing in time and fades out over `DROP_FADE_BARS` (2) bars, its
+high-pass rising to 2 kHz so its kick and bass never double the new drop. Tempos too far apart to sync (or
+low-confidence grids) get no build and no fade (overlapping would clash): a cut onto the drop with an echo
+tail. `handover()` calls `Deck.clearFilter()` to return the new live deck to all-pass. Ignored while
+a transition is running or under `SCHEDULE_MARGIN` away. The booth button takes `disabled` from React state,
+not a DOM write: React drops `onClick` when the *prop* says disabled.
+
+Effects: `MasterFx` sits between the master gain and the limiter, so it can never cancel the decks'
+transition automation. `AutoDJ.fx(kind)` starts the effect on the live deck's next beat (the riser on the
+next downbeat, running 4 bars) via `nextBoundary()`; effects use `cancelAndHoldAtTime` so re-firing restarts.
+
+Track requests: `AutoDJ.request(track, next)` keeps a queue that `loadNextTrack(…, useRequests)` drains before
+the selector's own picks (the selector never picks a queued track; the standby deck never takes one).
+`next` replaces the cued track if its mix hasn't started. A request is never lost on re-plan: mood change,
+Drop and recovery put it back in the queue. After a requested track outside the mood's tempo band, `jump` is
+set so the next pick steers back into the mood. The picker ranks every analysed track with
+`rankForRequest()` (same score as the auto-DJ, recently played last, off-tempo flagged).
+
+Volume matching: analysis measures integrated loudness (`loudness.ts`, on the 11 kHz mono analysis signal —
+our own scale, not true LUFS). `Deck.load(track, buffer, target)` sets the deck's `trim` gain to bring the
+track to the **library's median loudness** (`libraryLoudness`), capped at −12…+6 dB; the typical track plays
+unchanged. A fixed target would push a whole quiet library to the boost cap.
+
+Key: set by hand (`overrides.key`) → else the file's tag → else detected from the audio (`keydetect.ts`).
+`withAnalysis()` (store/library.ts) applies that order and keeps the tag key in `tagKey`.
+
+Key-lock (Library setting, off by default, "beta"): every deck's `out` goes through an AudioWorklet that shifts
+pitch by `1/playbackRate` (phase vocoder, N = 2048, hop N/8, phase reset on transients, exact pass-through at
+pitch 1). Its delay is a constant `KEYLOCK_DELAY_SAMPLES` on every deck, so decks stay aligned; it sits after
+the faders so transition automation still lands on the beat. `engine.outputDelay` is that delay: the booth
+display and master effects add it (what the room hears lags the deck clock). Falls back to no key-lock if the
+worklet can't load. Takes effect at the next Play.
+
+Drop extras: a staff Drop with a build-up also fires a noise riser that peaks exactly as the drop hits
+(`MasterFx.riserBetween`), cancelled if the Drop is re-planned. Moods with `dropSwap` (Peak Hour) turn their
+planned blends into drop swaps landing where the blend's bass swap would have (the breakdown); a staff Drop
+still pulls such a swap forward (`Planned.staffDrop`).
+
+Set log: `onPlayed` (AutoDJ dep) records every track that starts — set start, each transition, recoveries — in
+IndexedDB (`appendSetLog`, capped at 20 000). `/history` groups by night (6 am cut-over) and exports CSV.
+
+Saved queue: the request queue is saved with the last session whenever it changes and restored on hydrate
+(tracks that are gone or not ready are dropped), so auto-resume keeps the staff's requests. The picker leaves
+out the playing, cued and already-queued tracks.
+
+Offline: `public/sw.js` caches `/_next/static` (cache-first), pages and RSC (network-first) and other assets
+(stale-while-revalidate); registered only in production. `experimental.useOffline` powers the banner. A
+reload or reboot works offline for any page opened before; in-app navigation waits until the network is back.
+
+Library admin: never-play / favourite flags (`selector.playable`, `WEIGHTS.favourite`), crates (moods can be
+limited to crates; empty crates fall back to the whole library), "Needs attention" (`issues.ts`), and per-track
+fixes in `TrackEditor`: beat grid (re-analysed on the forced grid, checked by ear with `GridPreview` — only
+while the booth is stopped, it shares the speakers), drop threshold (`overrides.fullLevel`, applied live) and
+key. Overrides survive re-analysis.
+
+Moods: `/moods` edits presets; only differences are stored (`settings.moods`). `AutoDJ` reads the mood through
+`deps.resolveMood` at every decision, so edits apply from the next transition mid-set. `validateMood` guards
+the editor.
+
+Silence watchdog: uses `engine.peak()` — the loudest sample over a ~0.7 s analyser window. A short RMS window
+sampled every 500 ms can alias with the beat and land between sparse hits every time, reporting silence while
+the music plays (seen with synthetic kick-only tracks).
+
 ## Rules for audio code
 
 - **Schedule every sound on the AudioContext clock** (`start(when)`, `setValueAtTime`, ramps). Never trigger
   audio from `setTimeout`/`setInterval`; JS timers are only for planning and hand-over.
-- **Change playback rate only via `Deck.rampRate()`** so `PlaybackTimeline` stays in sync. Beat alignment
-  depends on it.
+- **Change playback rate only via `Deck.rampRate()`** so `PlaybackTimeline` stays in sync (it also drives the
+  key-lock pitch). Beat alignment depends on it.
+- Anything timed against what the room hears (master effects, display) adds `engine.outputDelay`.
 - `BiquadFilterNode.type` can't be scheduled — switch it immediately at an inaudible cut-off, then schedule
   the frequency sweep (see `filterSweep`).
 - Memory: a decoded stereo track is ~10 MB per minute. Decode only the next track (plus one standby with 3+
@@ -105,18 +215,33 @@ blend the incoming deck's rate glides back to 1.0 over 16 bars. `handover()` run
 npm run dev        # http://localhost:3000 (redirects to /booth)
 npm run check      # typecheck + lint + unit tests — run before finishing any change
 npm run build      # production build — must pass
+npm run e2e        # Playwright end-to-end tests on the build (first time: npx playwright install chromium)
 ```
 
 Browser testing: the Library page has an **"Add files (this session only)"** input
-(`data-testid="session-files"`) that Playwright can fill without a folder picker. Launch Chromium with
-`--autoplay-policy=no-user-gesture-required` so audio starts without a click.
+(`data-testid="session-files"`) that Playwright can fill without a folder picker; `e2e/fixtures.ts` generates
+synthetic club tracks (intro · breakdown · drop · breakdown · drop · outro; one 6 dB quieter).
+`playwright.config.ts` launches Chromium with `--autoplay-policy=no-user-gesture-required` and a silent output
+device, and starts `next start -p 3100` (build first). Audio runs for real; nothing is heard.
 
 ## Known limitations / next steps
 
-- Tempo sync uses `playbackRate`, which also shifts pitch (up to ±8% ≈ 1.3 semitones). Next: key-lock
-  time-stretch in an AudioWorklet (check the licence first — SoundTouch ports are LGPL).
-- Musical key comes only from file tags (`TKEY` etc.); no audio key detection yet.
+- Nothing has been checked by ear yet: drop detection, transitions, effects, key-lock and loudness matching
+  are verified with unit tests and headless-browser measurements on synthetic tracks only. Do the 50-track
+  listening check on the venue system before a real night.
+- Key-lock is a phase vocoder: on big tempo changes it can soften transients and sound slightly "phasey".
+  That's why it is off by default. Kick timing stays within 5 ms of the fixed delay (tested).
+- Loudness is measured on the analysis signal, not true LUFS; fine for matching tracks to each other.
+- Key detection is a single global key (no modulations); confidence below ~0.05 is a guess. Tags win.
+- Drop detection uses bass level alone. Tracks whose breakdowns keep a heavy bassline need the per-track
+  threshold raised in the track editor (or they mix out at the outro / `maxPlayBars`).
+- The incoming track always starts at its first downbeat and plays its whole intro inside the blend
+  (except drop swaps, which start a few bars before its drop).
+- Session-only tracks ("Add files") vanish on reload, so queued session tracks do too.
+- Grid preview shares the club speakers, so it is disabled while the booth plays (no separate cue output).
+- Offline: in-app navigation waits for the network; a full reload of a visited page works.
+- The set log, settings and edits live in this browser's IndexedDB only (no server, no backup) — export CSVs.
 - The 4th deck is allocated but layered (overlapping) blends are not implemented yet.
-- No server side yet: Postgres + Drizzle, Auth.js email magic link for the venue admin, and optional R2 backup
-  are planned. Analysis currently lives in the browser's IndexedDB.
-- Offline caching beyond the PWA manifest (service worker) is not implemented.
+- No server side (by owner decision for now): no accounts, sync, multi-venue, backup, remote control,
+  crowd input or MIDI controllers.
+- Dev tooling has known `npm audit` advisories (vitest 3, eslint-config-next); none ship in the app.

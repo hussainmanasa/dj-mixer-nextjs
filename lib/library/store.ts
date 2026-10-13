@@ -2,8 +2,10 @@
 // restart unattended lives here: the folder handle, track analysis, settings
 // and the last session. Client-only.
 
-import { createStore, del, get, set } from "idb-keyval";
-import type { MoodId, Track } from "@/lib/types";
+import { createStore, del, get, set, update } from "idb-keyval";
+import type { MoodOverrides } from "@/lib/dj/moods";
+import type { MoodId, SetLogEntry, Track } from "@/lib/types";
+import { MAX_LOG_ENTRIES } from "./setlog";
 
 const db = typeof indexedDB !== "undefined" ? createStore("ai-dj-mixer", "kv") : undefined;
 
@@ -12,19 +14,26 @@ const KEYS = {
   tracks: "library:tracks",
   settings: "settings",
   session: "session:last",
+  setLog: "setlog",
 } as const;
 
 export interface Settings {
   deckCount: number;
+  /** Keep tracks at their original key while tempo-syncing (AudioWorklet, beta). */
+  keyLock: boolean;
+  /** Admin edits to the mood presets. */
+  moods: MoodOverrides;
 }
 
 export interface LastSession {
   mood: MoodId;
   playing: boolean;
+  /** Staff-requested track ids still waiting (restored after a reload). */
+  queue?: string[];
   updatedAt: number;
 }
 
-export const DEFAULT_SETTINGS: Settings = { deckCount: 2 };
+export const DEFAULT_SETTINGS: Settings = { deckCount: 2, keyLock: false, moods: {} };
 
 export async function loadFolderHandle(): Promise<FileSystemDirectoryHandle | undefined> {
   return db ? get<FileSystemDirectoryHandle>(KEYS.folder, db) : undefined;
@@ -53,6 +62,19 @@ export async function loadSettings(): Promise<Settings> {
 
 export async function saveSettings(settings: Settings): Promise<void> {
   if (db) await set(KEYS.settings, settings, db);
+}
+
+export async function appendSetLog(entry: SetLogEntry): Promise<void> {
+  if (!db) return;
+  await update<SetLogEntry[]>(KEYS.setLog, (log = []) => [...log, entry].slice(-MAX_LOG_ENTRIES), db);
+}
+
+export async function loadSetLog(): Promise<SetLogEntry[]> {
+  return (db ? await get<SetLogEntry[]>(KEYS.setLog, db) : undefined) ?? [];
+}
+
+export async function clearSetLog(): Promise<void> {
+  if (db) await del(KEYS.setLog, db);
 }
 
 export async function loadLastSession(): Promise<LastSession | undefined> {
