@@ -3,7 +3,7 @@
 // Client-only.
 
 import type { TrackAnalysis } from "@/lib/types";
-import { ANALYSIS_SAMPLE_RATE } from "./bpm";
+import { ANALYSIS_SAMPLE_RATE, type ForcedGrid } from "./bpm";
 import type { AnalyzeRequest, AnalyzeResponse } from "./analyze.worker";
 
 let worker: Worker | null = null;
@@ -39,7 +39,7 @@ async function decodeForAnalysis(file: Blob): Promise<AudioBuffer> {
   return ctx.decodeAudioData(bytes);
 }
 
-export async function analyzeFile(file: Blob, tagBpm: number | null): Promise<TrackAnalysis> {
+export async function analyzeFile(file: Blob, tagBpm: number | null, forced: ForcedGrid | null = null): Promise<TrackAnalysis> {
   const buffer = await decodeForAnalysis(file);
   const channels: Float32Array[] = [];
   for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c).slice());
@@ -47,7 +47,7 @@ export async function analyzeFile(file: Blob, tagBpm: number | null): Promise<Tr
   const w = getWorker();
   return new Promise<TrackAnalysis>((resolve, reject) => {
     pending.set(id, { resolve, reject });
-    const req: AnalyzeRequest = { id, channels, sampleRate: buffer.sampleRate, tagBpm };
+    const req: AnalyzeRequest = { id, channels, sampleRate: buffer.sampleRate, tagBpm, forced };
     w.postMessage(req, channels.map((c) => c.buffer));
   });
 }

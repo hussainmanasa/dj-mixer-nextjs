@@ -12,6 +12,9 @@
 
 # testing
 /coverage
+/e2e/.fixtures
+/test-results
+/playwright-report
 
 # next.js
 /.next/

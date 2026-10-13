@@ -12,6 +12,8 @@ export interface TransitionPlan {
   start: number;
   /** Context time the outgoing deck is silent and can be stopped. */
   end: number;
+  /** Drop transitions: context time the incoming track's drop hits. */
+  drop?: number;
 }
 
 /**
@@ -86,6 +88,66 @@ export function echoOut(out: Deck, inc: Deck, t: number, outBeatSec: number): Tr
   inc.fader.gain.setValueAtTime(1, incStart);
 
   return { kind: "echoOut", start: incStart, end: incStart + tail };
+}
+
+/** Bars the outgoing track keeps fading after a drop lands. */
+export const DROP_FADE_BARS = 2;
+
+/**
+ * Drop swap (staff pressed Drop). The incoming deck starts at `start`, some
+ * bars before its own drop, beat-matched so that drop lands on `t`:
+ *   build   incoming rises under a falling high-pass with its bass killed;
+ *           the outgoing track eases down to 70% under a rising high-pass
+ *   t       the incoming bass and full range hit together
+ *   fade    the outgoing track keeps playing in time and fades out over
+ *           DROP_FADE_BARS, its high-pass rising so its kick and bass never
+ *           double the new drop
+ * With no build (`start === t`: tempos too far apart to sync, or an
+ * unreliable grid) overlapping would clash, so it is a clean cut onto the
+ * drop with an echo tail instead.
+ */
+export function dropIn(out: Deck, inc: Deck, start: number, t: number, outBeatSec: number): TransitionPlan {
+  const build = t - start > 0.05;
+  const fadeEnd = t + DROP_FADE_BARS * 4 * outBeatSec;
+  if (build) {
+    // Switch the filter type now at an inaudible cut-off; the sweep is scheduled.
+    out.filter.type = "highpass";
+    out.filter.frequency.cancelScheduledValues(0);
+    out.filter.frequency.setValueAtTime(10, 0);
+    out.filter.frequency.setValueAtTime(10, start);
+    out.filter.frequency.exponentialRampToValueAtTime(350, t);
+    out.filter.frequency.exponentialRampToValueAtTime(2000, fadeEnd);
+    out.fader.gain.setValueAtTime(1, start);
+    out.fader.gain.linearRampToValueAtTime(0.7, t);
+    out.fader.gain.linearRampToValueAtTime(0, fadeEnd);
+  } else {
+    out.echoDelay.delayTime.setValueAtTime(Math.min(4, outBeatSec * 0.75), t - outBeatSec);
+    out.echoSend.gain.setValueAtTime(0, t - outBeatSec);
+    out.echoSend.gain.linearRampToValueAtTime(0.6, t - 0.01);
+    out.echoSend.gain.linearRampToValueAtTime(0, t + 0.02);
+    out.fader.gain.setValueAtTime(1, t - 0.01);
+    out.fader.gain.linearRampToValueAtTime(0, t + 0.02);
+  }
+
+  inc.resetControls(0);
+  if (build) {
+    inc.filter.type = "highpass";
+    inc.filter.frequency.setValueAtTime(700, start);
+    inc.filter.frequency.exponentialRampToValueAtTime(120, t - 0.01);
+    inc.low.gain.setValueAtTime(EQ_KILL_DB, start);
+    inc.fader.gain.setValueAtTime(0, start);
+    inc.fader.gain.linearRampToValueAtTime(0.75, t - 0.01);
+  } else {
+    inc.fader.gain.setValueAtTime(0, t - 0.01);
+  }
+  // On the drop: full range, bass and level in together (short ramps, no clicks).
+  inc.filter.frequency.setValueAtTime(10, t);
+  inc.low.gain.setValueAtTime(build ? EQ_KILL_DB : 0, t - 0.01);
+  inc.low.gain.linearRampToValueAtTime(0, t + 0.01);
+  inc.fader.gain.linearRampToValueAtTime(1, t + 0.02);
+
+  // Faded: hand over once the outgoing deck is silent. Cut: after one bar, once the echo tail is in the delay line.
+  return { kind: "drop", start, end: build ? fadeEnd : t + 4 * outBeatSec, drop: t };
 }
 
 /** Hard cut on a downbeat — the fallback when a beat grid can't be trusted. */

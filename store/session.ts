@@ -1,18 +1,23 @@
 "use client";
 
 // Booth session: owns the single AutoDJ instance and mirrors its status for
-// the UI. Staff can only change the mood and press play/stop.
+// the UI. Staff change the mood, press play/stop and Drop, fire effects and
+// request tracks; the AutoDJ does all the mixing.
 
 import { create } from "zustand";
-import { AutoDJ, type AutoDJStatus } from "@/lib/dj/autodj";
-import { DEFAULT_MOOD } from "@/lib/dj/moods";
-import { loadLastSession, saveLastSession } from "@/lib/library/store";
-import type { MoodId } from "@/lib/types";
+import type { FxKind } from "@/lib/audio/fx";
+import { AutoDJ, type AutoDJStatus, type BoothSnapshot } from "@/lib/dj/autodj";
+import { DEFAULT_MOOD, resolveMood, targetEnergy } from "@/lib/dj/moods";
+import { rankForRequest, type RequestOption } from "@/lib/dj/selector";
+import { appendSetLog, loadLastSession, saveLastSession } from "@/lib/library/store";
+import type { MoodId, Track } from "@/lib/types";
 import { readyTracks, useLibrary } from "./library";
 
 interface SessionState {
   status: AutoDJStatus;
   starting: boolean;
+  /** Stop was pressed and the mix is fading out (the button stays disabled until it's silent). */
+  stopping: boolean;
   /** The last session was playing when the page closed (crash / reboot). */
   resumeAvailable: boolean;
 
@@ -22,9 +27,20 @@ interface SessionState {
   tryAutoResume: () => Promise<void>;
   stop: () => Promise<void>;
   setMood: (mood: MoodId) => void;
+  /** Bring the next track in on its drop at the next 4-bar boundary. */
+  drop: () => void;
+  /** Fire an effect on the whole mix, on the next beat. */
+  fx: (kind: FxKind) => void;
+  /** Staff request: `next` replaces the cued track, otherwise it joins the queue. */
+  request: (trackId: string, next: boolean) => void;
+  unrequest: (trackId: string) => void;
+  /** Tracks for the picker, best fit for the mood (and the playing track) first. */
+  rankTracks: () => RequestOption[];
   level: () => number;
   /** AudioContext time in seconds (0 when no engine). */
   clock: () => number;
+  /** Live deck positions and levels for the booth display (null when stopped). */
+  snapshot: () => BoothSnapshot | null;
 }
 
 let dj: AutoDJ | null = null;
@@ -35,27 +51,41 @@ const idle = (mood: MoodId, deckCount: number): AutoDJStatus => ({
   mood,
   now: null,
   next: null,
+  standby: null,
+  queue: [],
+  keyLock: false,
   note: null,
   error: null,
   deckCount,
 });
 
-function persist(mood: MoodId, playing: boolean) {
-  void saveLastSession({ mood, playing, updatedAt: Date.now() });
+let lastQueueKey = "";
+
+function persist(mood: MoodId, playing: boolean, queue: Track[]) {
+  lastQueueKey = queue.map((t) => t.id).join(",");
+  void saveLastSession({ mood, playing, queue: queue.map((t) => t.id), updatedAt: Date.now() });
 }
 
 export const useSession = create<SessionState>((set, get) => ({
   status: idle(DEFAULT_MOOD, 2),
   starting: false,
+  stopping: false,
   resumeAvailable: false,
 
   async hydrate() {
     const last = await loadLastSession();
-    if (last) set({ status: { ...get().status, mood: last.mood }, resumeAvailable: last.playing });
+    if (!last) return;
+    // Requested tracks survive a reload; tracks that are gone or not ready are dropped.
+    const lib = useLibrary.getState();
+    if (!lib.hydrated) await lib.hydrate();
+    const tracks = useLibrary.getState().tracks;
+    const queue = (last.queue ?? []).map((id) => tracks[id]).filter((t) => t?.status === "ready" && t.analysis);
+    lastQueueKey = queue.map((t) => t.id).join(",");
+    set({ status: { ...get().status, mood: last.mood, queue: dj ? get().status.queue : queue }, resumeAvailable: last.playing });
   },
 
   async play() {
-    if (get().starting || get().status.playing) return;
+    if (get().starting || get().stopping || get().status.playing) return;
     set({ starting: true, resumeAvailable: false });
     try {
       const lib = useLibrary.getState();
@@ -63,9 +93,9 @@ export const useSession = create<SessionState>((set, get) => ({
         set({ status: { ...get().status, error: "Allow access to the music folder to start." } });
         return;
       }
-      const { deckCount } = lib.settings;
-      // Re-create the engine if the deck count setting changed.
-      if (dj && dj.engine.decks.length !== deckCount) {
+      const { deckCount, keyLock } = lib.settings;
+      // Re-create the engine if the deck count or key-lock setting changed.
+      if (dj && (dj.engine.decks.length !== deckCount || dj.keyLock !== keyLock)) {
         await dj.dispose();
         dj = null;
       }
@@ -73,11 +103,32 @@ export const useSession = create<SessionState>((set, get) => ({
         getTracks: () => readyTracks(useLibrary.getState().tracks),
         getFile: (t) => useLibrary.getState().getFile(t),
         onTrackError: (id, msg) => useLibrary.getState().markError(id, msg),
-        onStatus: (status) => set({ status }),
-      });
+        resolveMood: (id) => resolveMood(id, useLibrary.getState().settings.moods),
+        onStatus: (status) => {
+          set({ status });
+          // Save the queue whenever it changes so a reload can restore it.
+          if (status.queue.map((t) => t.id).join(",") !== lastQueueKey) persist(status.mood, status.playing, status.queue);
+        },
+        onPlayed: (t, how, requested, mood) =>
+          void appendSetLog({
+            at: Date.now(),
+            trackId: t.id,
+            title: t.title,
+            artist: t.artist,
+            path: t.path.replace(/^session:/, ""),
+            mood,
+            how,
+            requested,
+            bpm: t.analysis?.bpm ?? 0,
+            key: t.camelot,
+            duration: t.analysis?.duration ?? 0,
+          }),
+      }, keyLock);
       dj.setMood(get().status.mood);
+      // Requests made before the first Play.
+      for (const t of get().status.queue) dj.request(t, false);
       await dj.start();
-      persist(get().status.mood, dj.isPlaying);
+      persist(get().status.mood, dj.isPlaying, get().status.queue);
     } catch (err) {
       set({ status: { ...get().status, error: err instanceof Error ? err.message : String(err) } });
     } finally {
@@ -94,15 +145,60 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   async stop() {
-    if (!dj) return;
-    await dj.stop();
-    persist(get().status.mood, false);
+    // A second press during the fade-out must not restart (or re-stop) the music.
+    if (!dj || get().stopping || get().starting) return;
+    set({ stopping: true });
+    try {
+      await dj.stop();
+      persist(get().status.mood, false, get().status.queue);
+    } finally {
+      set({ stopping: false });
+    }
   },
 
   setMood(mood) {
     if (dj) dj.setMood(mood);
     else set({ status: { ...get().status, mood } });
-    persist(mood, get().status.playing);
+    persist(mood, get().status.playing, get().status.queue);
+  },
+
+  drop() {
+    dj?.drop();
+  },
+
+  fx(kind) {
+    dj?.fx(kind);
+  },
+
+  request(trackId, next) {
+    const track = useLibrary.getState().tracks[trackId];
+    if (!track) return;
+    if (dj) return dj.request(track, next);
+    const queue = get().status.queue.filter((t) => t.id !== trackId);
+    set({ status: { ...get().status, queue: next ? [track, ...queue] : [...queue, track] } });
+    persist(get().status.mood, false, get().status.queue);
+  },
+
+  unrequest(trackId) {
+    if (dj) return dj.unrequest(trackId);
+    set({ status: { ...get().status, queue: get().status.queue.filter((t) => t.id !== trackId) } });
+    persist(get().status.mood, false, get().status.queue);
+  },
+
+  rankTracks() {
+    const tracks = readyTracks(useLibrary.getState().tracks);
+    if (dj) return dj.rankTracks(tracks);
+    const mood = resolveMood(get().status.mood, useLibrary.getState().settings.moods);
+    const queued = new Set(get().status.queue.map((t) => t.id));
+    return rankForRequest(tracks.filter((t) => !queued.has(t.id)), {
+      mood,
+      current: null,
+      currentBpm: null,
+      targetEnergy: targetEnergy(mood, 0),
+      history: [],
+      recentArtists: [],
+      jump: false,
+    });
   },
 
   level() {
@@ -111,5 +207,9 @@ export const useSession = create<SessionState>((set, get) => ({
 
   clock() {
     return dj?.engine.now ?? 0;
+  },
+
+  snapshot() {
+    return dj?.isPlaying ? dj.snapshot() : null;
   },
 }));

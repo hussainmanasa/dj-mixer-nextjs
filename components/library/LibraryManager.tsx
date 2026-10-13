@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { canPickFolders } from "@/lib/library/scan";
-import { MAX_DECKS, MIN_DECKS, type Track } from "@/lib/types";
+import { MAX_DECKS, MIN_DECKS } from "@/lib/types";
 import { useLibrary } from "@/store/library";
+import { TrackTable } from "./TrackTable";
 
 const DECK_HELP: Record<number, string> = {
   2: "Standard A/B mixing. Any modern laptop.",
@@ -15,7 +16,11 @@ export function LibraryManager() {
   const s = useLibrary();
   const { hydrate } = s;
   useEffect(() => {
-    void hydrate();
+    // Analyse anything new or analysed by an older version once the folder is readable.
+    void hydrate().then(() => {
+      const lib = useLibrary.getState();
+      if (lib.folderState === "ready") void lib.analyzePending();
+    });
   }, [hydrate]);
 
   const [supported, setSupported] = useState(true);
@@ -125,71 +130,26 @@ export function LibraryManager() {
           </div>
           <p className="mt-3 text-sm text-muted">{DECK_HELP[s.settings.deckCount]}</p>
           <p className="mt-1 text-xs text-muted">Takes effect the next time Play is pressed.</p>
-        </div>
-      </section>
 
-      <section className="rounded-2xl border border-border bg-surface">
-        <div className="flex items-center justify-between px-5 py-4">
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted">Tracks</h2>
-          <p className="text-sm text-muted">
-            {counts.ready} ready · {counts.pending} pending · {counts.error} failed
+          <h2 className="mt-6 text-sm font-medium uppercase tracking-wider text-muted">Key lock (beta)</h2>
+          <label className="mt-3 flex cursor-pointer items-center gap-3">
+            <input
+              type="checkbox"
+              checked={s.settings.keyLock}
+              onChange={(e) => s.setKeyLock(e.target.checked)}
+              className="h-6 w-6 accent-accent"
+            />
+            <span className="text-sm">Keep tracks in their original key while matching tempo</span>
+          </label>
+          <p className="mt-2 text-sm text-muted">
+            Without it, a track sped up 5% also plays 5% higher. With it, the key stays put, at the cost of a slightly
+            softer sound on big tempo changes. Listen on the venue system before using it on a busy night.
           </p>
-        </div>
-        <div className="max-h-[60vh] overflow-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="sticky top-0 bg-surface-2 text-muted">
-              <tr>
-                <th className="px-5 py-2 font-medium">Title</th>
-                <th className="px-3 py-2 font-medium">Artist</th>
-                <th className="px-3 py-2 text-right font-medium">BPM</th>
-                <th className="px-3 py-2 font-medium">Key</th>
-                <th className="px-3 py-2 text-right font-medium">Energy</th>
-                <th className="px-3 py-2 text-right font-medium">Grid</th>
-                <th className="px-5 py-2 font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {list.map((t) => (
-                <TrackRow key={t.id} track={t} />
-              ))}
-              {list.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="px-5 py-10 text-center text-muted">
-                    No tracks yet. Choose the folder with your downloaded music.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+          <p className="mt-1 text-xs text-muted">Takes effect the next time Play is pressed.</p>
         </div>
       </section>
-    </main>
-  );
-}
 
-function TrackRow({ track: t }: { track: Track }) {
-  const a = t.analysis;
-  return (
-    <tr className="border-t border-border">
-      <td className="max-w-xs truncate px-5 py-2" title={t.path}>
-        {t.title}
-      </td>
-      <td className="max-w-[12rem] truncate px-3 py-2 text-muted">{t.artist || "—"}</td>
-      <td className="px-3 py-2 text-right font-mono">{a ? a.bpm.toFixed(1) : "—"}</td>
-      <td className="px-3 py-2 font-mono">{t.camelot ?? "—"}</td>
-      <td className="px-3 py-2 text-right font-mono">{a ? a.energy.toFixed(2) : "—"}</td>
-      <td className={`px-3 py-2 text-right font-mono ${a && a.beatConfidence < 0.35 ? "text-warn" : ""}`}>
-        {a ? `${Math.round(a.beatConfidence * 100)}%` : "—"}
-      </td>
-      <td className="px-5 py-2">
-        {t.status === "ready" && <span className="text-good">Ready</span>}
-        {t.status === "pending" && <span className="text-muted">Pending</span>}
-        {t.status === "error" && (
-          <span className="text-bad" title={t.error}>
-            Failed
-          </span>
-        )}
-      </td>
-    </tr>
+      <TrackTable />
+    </main>
   );
 }

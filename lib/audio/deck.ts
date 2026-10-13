@@ -1,7 +1,11 @@
-// One playback deck: buffer source → 3-band EQ → filter → fader → master,
-// plus an echo send (delay with feedback) used by echo-out transitions.
+// One playback deck: buffer source → trim (volume matching) → 3-band EQ →
+// filter → fader → out [→ key-lock] → master, plus an echo send (delay with
+// feedback) used by echo-out transitions that also feeds `out`. Key-lock sits
+// after all of the deck's automation, so fades and EQ moves still land on the
+// beat; every deck gets the same key-lock delay, so decks stay aligned.
 // Client-only: requires Web Audio.
 
+import { trimDb } from "@/lib/analysis/loudness";
 import type { Track } from "@/lib/types";
 import { PlaybackTimeline } from "./timeline";
 
@@ -10,6 +14,8 @@ export const EQ_KILL_DB = -26;
 export class Deck {
   readonly index: number;
   private readonly ctx: AudioContext;
+  /** Volume matching: brings every track to the same loudness (set on load). */
+  readonly trim: GainNode;
   readonly low: BiquadFilterNode;
   readonly mid: BiquadFilterNode;
   readonly high: BiquadFilterNode;
@@ -18,6 +24,10 @@ export class Deck {
   readonly echoSend: GainNode;
   readonly echoDelay: DelayNode;
   readonly echoFeedback: GainNode;
+  /** Everything the deck outputs passes through here. */
+  readonly out: GainNode;
+  private readonly destination: AudioNode;
+  private keyLock: AudioWorkletNode | null = null;
 
   private source: AudioBufferSourceNode | null = null;
   track: Track | null = null;
@@ -30,6 +40,10 @@ export class Deck {
   constructor(ctx: AudioContext, destination: AudioNode, index: number) {
     this.ctx = ctx;
     this.index = index;
+    this.destination = destination;
+    this.out = new GainNode(ctx, { gain: 1 });
+    this.out.connect(destination);
+    this.trim = new GainNode(ctx, { gain: 1 });
     this.low = new BiquadFilterNode(ctx, { type: "lowshelf", frequency: 200, gain: 0 });
     this.mid = new BiquadFilterNode(ctx, { type: "peaking", frequency: 1000, Q: 0.7, gain: 0 });
     this.high = new BiquadFilterNode(ctx, { type: "highshelf", frequency: 3500, gain: 0 });
@@ -40,20 +54,38 @@ export class Deck {
     this.echoDelay = new DelayNode(ctx, { maxDelayTime: 4, delayTime: 0.375 });
     this.echoFeedback = new GainNode(ctx, { gain: 0.45 });
 
-    this.low.connect(this.mid).connect(this.high).connect(this.filter).connect(this.fader).connect(destination);
+    this.trim.connect(this.low);
+    this.low.connect(this.mid).connect(this.high).connect(this.filter).connect(this.fader).connect(this.out);
     // Echo taps pre-fader so the tail keeps ringing after the fader closes.
-    this.filter.connect(this.echoSend).connect(this.echoDelay).connect(destination);
+    this.filter.connect(this.echoSend).connect(this.echoDelay).connect(this.out);
     this.echoDelay.connect(this.echoFeedback).connect(this.echoDelay);
+  }
+
+  /** Route the deck through a key-lock node (or straight to the master with null). Only while stopped. */
+  setKeyLock(node: AudioWorkletNode | null): void {
+    this.out.disconnect();
+    this.keyLock?.disconnect();
+    this.keyLock = node;
+    if (node) this.out.connect(node).connect(this.destination);
+    else this.out.connect(this.destination);
+  }
+
+  /** Key-lock pitch follows 1 / playbackRate so the track keeps its key. */
+  private get pitch(): AudioParam | null {
+    return this.keyLock?.parameters.get("pitch") ?? null;
   }
 
   get isPlaying(): boolean {
     return this.source !== null;
   }
 
-  load(track: Track, buffer: AudioBuffer): void {
+  /** Load a track, trimming it to `targetLoudness` (the library's typical level). */
+  load(track: Track, buffer: AudioBuffer, targetLoudness?: number): void {
     this.stopNow();
     this.track = track;
     this.buffer = buffer;
+    // The deck is silent between load and start, so the trim can change at once.
+    this.trim.gain.setValueAtTime(Math.pow(10, trimDb(track.analysis?.loudness, targetLoudness) / 20), this.ctx.currentTime);
   }
 
   /** Start playback at context time `when` from track position `offset`. */
@@ -61,8 +93,14 @@ export class Deck {
     if (!this.buffer) throw new Error(`Deck ${this.index}: nothing loaded`);
     this.stopNow();
     const src = new AudioBufferSourceNode(this.ctx, { buffer: this.buffer });
-    src.playbackRate.setValueAtTime(rate, Math.max(this.ctx.currentTime, when - 0.01));
-    src.connect(this.low);
+    const at = Math.max(this.ctx.currentTime, when - 0.01);
+    src.playbackRate.setValueAtTime(rate, at);
+    const pitch = this.pitch;
+    if (pitch) {
+      pitch.cancelScheduledValues(this.ctx.currentTime);
+      pitch.setValueAtTime(1 / rate, at);
+    }
+    src.connect(this.trim);
     src.onended = () => {
       if (this.source !== src) return;
       this.source = null;
@@ -81,6 +119,9 @@ export class Deck {
     const p = this.source.playbackRate;
     p.setValueAtTime(from, t0);
     p.linearRampToValueAtTime(to, t1);
+    // 1/rate is close enough to linear over ±8% (< 3 cents off mid-ramp).
+    this.pitch?.setValueAtTime(1 / from, t0);
+    this.pitch?.linearRampToValueAtTime(1 / to, t1);
     this.timeline.ramp = { t0, t1, r0: from, r1: to };
   }
 
@@ -133,6 +174,16 @@ export class Deck {
     this.filter.frequency.setValueAtTime(1000, now);
     this.fader.gain.setValueAtTime(gain, now);
     this.echoSend.gain.setValueAtTime(0, now);
+  }
+
+  /**
+   * Back to the neutral all-pass filter after a transition. Only call when the
+   * filter sits at an inaudible setting (high-pass ≈10 Hz, low-pass ≈20 kHz).
+   */
+  clearFilter(): void {
+    this.filter.frequency.cancelScheduledValues(0);
+    this.filter.type = "allpass";
+    this.filter.frequency.setValueAtTime(1000, this.ctx.currentTime);
   }
 
   /** Release the decoded buffer (big: ~10 MB per stereo minute). */

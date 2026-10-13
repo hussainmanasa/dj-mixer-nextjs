@@ -18,9 +18,12 @@ npm run dev
 Open http://localhost:3000, then:
 
 1. **Library** → *Choose music folder* and pick the folder with your tracks (MP3, M4A/AAC, WAV, FLAC, Ogg).
-   Each track is analysed once (tempo, beat grid, energy); keys are read from file tags.
+   Each track is analysed once (tempo, beat grid, drops, loudness, key — tags win over detection).
 2. Optionally set **Decks** to 2, 3 or 4.
 3. **Booth** → pick a mood → **Play**. Change the mood any time; the music never stops.
+4. Optional, while it plays: **Drop** brings the next track in on its drop; **Effects** (Echo, Filter, Reverb,
+   Riser) fire on the next beat; **Change track** / **Add track** request music. The auto-DJ still
+   beat-matches and mixes every request for the mood.
 
 ## Running at a venue
 
@@ -41,11 +44,20 @@ When Chrome asks for access to the music folder, choose **Allow on every visit**
 Only use tracks the club is licensed to play in public (DJ pools or stores whose terms allow DJ use), and keep
 the venue's public performance licences current (in India, for example, PPL and IPRS).
 
+## Admin
+
+- **Library** — folder, analysis, deck count and key lock (beta). The track table flags problems
+  (*Needs attention*); **Edit** a track to mark it *Favourite* / *Never play*, add it to crates, fix its beat grid
+  (listen with clicks), its drop detection or its key.
+- **Moods** — tune each mood's tempo, energy, blend length, how long tracks play, drop swaps and crates.
+- **History** — every track played, by night; export CSV for your licence reports.
+
 ## Development
 
 ```bash
 npm run check   # typecheck + lint + unit tests
 npm run build
+npm run e2e     # end-to-end tests on the build (first time: npx playwright install chromium)
 ```
 
 See `AGENTS.md` for the architecture and the rules AI coding agents (and humans) should follow.
