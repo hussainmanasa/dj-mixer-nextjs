@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Track, TrackAnalysis } from "@/lib/types";
 import { getMood } from "./moods";
-import { chooseTransition, isMoodJump, pickNext, rankCandidates, rankForRequest, type SelectionContext } from "./selector";
+import { chooseTransition, isMoodJump, pickNext, rankCandidates, rankForRequest, syncRatio, tempoDistance, type SelectionContext } from "./selector";
 import { mixOutPoint, nextDownbeat } from "./mixpoints";
 
 function track(id: string, bpm: number, energy: number, extra: Partial<Track> = {}, a: Partial<TrackAnalysis> = {}): Track {
@@ -156,5 +156,36 @@ describe("admin flags and crates", () => {
     expect(rankCandidates(lib, ctx({ mood })).map((c) => c.track.id)).toEqual(["house"]);
     const empty = { ...getMood("groove"), crates: ["Disco"] };
     expect(rankCandidates(lib, ctx({ mood: empty }))).toHaveLength(2);
+  });
+});
+
+describe("half/double tempo (moods with halfTime)", () => {
+  it("finds the multiplier that syncs, preferring 1", () => {
+    expect(syncRatio(128, 126)).toBe(1);
+    expect(syncRatio(128, 64)).toBeNull();
+    expect(syncRatio(128, 64, true)).toBe(2);
+    expect(syncRatio(64, 127, true)).toBe(0.5);
+    expect(syncRatio(128, 100, true)).toBeNull();
+    expect(tempoDistance(128, 65, true)).toBeCloseTo(2 / 128, 6);
+  });
+
+  it("blends a half-tempo ballad instead of echoing out", () => {
+    const party = track("party", 128, 0.8);
+    const ballad = track("ballad", 64, 0.6);
+    expect(chooseTransition(party, ballad, 128, false)).toBe("echoOut");
+    expect(chooseTransition(party, ballad, 128, false, true)).toBe("blend");
+  });
+
+  it("scores a half-tempo song as close in tempo, and in the mood's band", () => {
+    const desi = getMood("desi");
+    const current = track("cur", 128, 0.8);
+    const lib = [track("ballad", 64.5, 0.8), track("far", 100, 0.8)];
+    expect(pickNext(lib, ctx({ mood: desi, current, currentBpm: 128 }))?.id).toBe("ballad");
+    expect(rankForRequest(lib, ctx({ mood: desi, current, currentBpm: 128 })).find((o) => o.track.id === "ballad")?.syncable).toBe(true);
+  });
+
+  it("doesn't call it a mood jump when ×2 lands in the band", () => {
+    expect(isMoodJump(64, getMood("desi"))).toBe(false);
+    expect(isMoodJump(64, getMood("peak"))).toBe(true);
   });
 });

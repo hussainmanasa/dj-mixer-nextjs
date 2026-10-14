@@ -270,6 +270,8 @@ function CueSection({ track }: { track: Track }) {
       </div>
       {boothPlaying && <p className="mt-2 text-sm text-warn">Stop the set to listen — previews play through the club speakers.</p>}
 
+      <Suggestions track={track} />
+
       <table className="mt-3 w-full text-sm">
         <tbody>
           {MARKERS.map(({ key, label, snap }) => (
@@ -323,6 +325,67 @@ function CueSection({ track }: { track: Track }) {
         </ul>
       )}
     </Section>
+  );
+}
+
+/** Hook and dialogue the analysis suggests: listen, then Use to set the markers. */
+function Suggestions({ track }: { track: Track }) {
+  const setCues = useLibrary((s) => s.setCues);
+  const getFile = useLibrary((s) => s.getFile);
+  const boothPlaying = useSession((s) => s.status.playing);
+  const preview = usePreview();
+  const a = track.analysis!;
+  if (a.suggestedHook === undefined && a.suggestedDialogue === undefined) {
+    return <p className="mt-3 text-sm text-muted">Suggestions appear once this song has been re-analysed.</p>;
+  }
+  const cues = track.cues ?? {};
+  const rows = [
+    {
+      label: "Hook",
+      range: a.suggestedHook,
+      used: cues.hookStart === a.suggestedHook?.start && cues.hookEnd === a.suggestedHook?.end,
+      use: (r: { start: number; end: number }) => setCues(track.id, { hookStart: r.start, hookEnd: r.end }),
+      // Listen to the hook itself.
+      listen: async (r: { start: number; end: number }) =>
+        preview.play("cues", async (p) => p.playFrom(await getFile(track), r.start, { length: r.end - r.start })),
+    },
+    {
+      label: "Dialogue",
+      range: a.suggestedDialogue,
+      used: cues.dialogueStart === a.suggestedDialogue?.start && cues.dialogueEnd === a.suggestedDialogue?.end,
+      use: (r: { start: number; end: number }) => setCues(track.id, { dialogueStart: r.start, dialogueEnd: r.end }),
+      // Listen to it as it would play: the dialogue, then the drop.
+      listen: async (r: { start: number; end: number }) =>
+        preview.play("dialogue", async (p) =>
+          p.playFrom(await getFile(track), r.start, { jump: { at: r.end, to: dropCue(a), after: 8 * barSeconds(a) } }),
+        ),
+    },
+  ];
+  return (
+    <div className="mt-3 rounded-xl border border-dashed border-border p-3">
+      <p className="text-xs uppercase tracking-wider text-muted">Suggested by the analysis — check by ear</p>
+      {rows.map(({ label, range, used, use, listen }) => (
+        <div key={label} className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+          <span className="w-20 text-muted">{label}</span>
+          {range ? (
+            <>
+              <span className="font-mono">
+                {clock(range.start)} – {clock(range.end)}
+              </span>
+              <span className="text-xs text-muted">{Math.round(range.confidence * 100)}% sure</span>
+              <button type="button" className="btn" disabled={boothPlaying || preview.loading} onClick={() => listen(range)} aria-label={`Listen to the suggested ${label.toLowerCase()}`}>
+                ▶ Listen
+              </button>
+              <button type="button" className="btn-primary" disabled={used} onClick={() => use(range)} aria-label={`Use the suggested ${label.toLowerCase()}`}>
+                {used ? "In use" : "Use"}
+              </button>
+            </>
+          ) : (
+            <span className="text-muted">None found</span>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
 

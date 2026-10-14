@@ -51,15 +51,16 @@ the venue's public performance licences current (in India, for example, PPL and 
   (listen with clicks), its drop detection or its key.
 - **Moods** — tune each mood's tempo, energy, blend length, how long tracks play, drop swaps, crates, the set
   opener and "hold until Drop".
-- **Song markers** (track editor) — mark a song's dialogue and hook while it plays (*Mark now*), and try the
-  dialogue → drop. Used by Drop and **Desi Night**.
+- **Song markers** (track editor) — the analysis *suggests* a hook and a dialogue (listen, then **Use**), or mark
+  them yourself while the song plays (*Mark now*); try the dialogue → drop. Used by Drop and **Desi Night**.
 
 ## Desi Night
 
 Pick **Desi Night** before pressing Play: the set opens with the hook of a slow song from the *Romantic* crate,
 then drops into the party (a marked dialogue plays first, then the drop). After that each song plays until
 you press **Drop**. On the cued deck, **Start from** chooses how the next song comes in (Auto, Beginning,
-Dialogue, Hook, Drop, or tap a bar).
+Dialogue, Hook, Drop, or tap a bar). Songs at half speed are beat-matched (a 64 BPM ballad with a 128 BPM
+track), and when two songs are too far apart in tempo the old one **rewinds** before the next one hits.
 - **History** — every track played, by night; export CSV for your licence reports.
 
 ## Development

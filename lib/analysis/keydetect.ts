@@ -20,9 +20,11 @@ export interface DetectedKey {
   confidence: number;
 }
 
-/** Summed energy per pitch class (C = 0) over the whole signal. */
-export function chromagram(samples: Float32Array, sampleRate: number): Float64Array {
-  const chroma = new Float64Array(12);
+/**
+ * Energy per pitch class (C = 0) for each analysis frame, normalised per
+ * frame (sums to 1; silent frames are all zero). `time` is the frame centre.
+ */
+export function chromaFrames(samples: Float32Array, sampleRate: number): { time: number; chroma: Float64Array }[] {
   const win = hann(FRAME);
   const re = new Float64Array(FRAME);
   const im = new Float64Array(FRAME);
@@ -31,6 +33,7 @@ export function chromagram(samples: Float32Array, sampleRate: number): Float64Ar
     const f = (k * sampleRate) / FRAME;
     binPc.push(f < MIN_HZ || f > MAX_HZ ? -1 : (((Math.round(12 * Math.log2(f / 440)) + 9) % 12) + 12) % 12);
   }
+  const frames: { time: number; chroma: Float64Array }[] = [];
   for (let s = 0; s + FRAME <= samples.length; s += FRAME / 2) {
     for (let i = 0; i < FRAME; i++) {
       re[i] = samples[s + i] * win[i];
@@ -42,10 +45,19 @@ export function chromagram(samples: Float32Array, sampleRate: number): Float64Ar
       const pc = binPc[k];
       if (pc >= 0) frame[pc] += Math.sqrt(re[k] * re[k] + im[k] * im[k]);
     }
-    // Normalise per frame so loud sections don't dominate the key.
+    // Normalise per frame so loud sections don't dominate.
     const total = frame.reduce((a, b) => a + b, 0);
-    if (total > 1e-6) for (let pc = 0; pc < 12; pc++) chroma[pc] += frame[pc] / total;
+    if (total > 1e-6) for (let pc = 0; pc < 12; pc++) frame[pc] /= total;
+    else frame.fill(0);
+    frames.push({ time: (s + FRAME / 2) / sampleRate, chroma: frame });
   }
+  return frames;
+}
+
+/** Summed energy per pitch class (C = 0) over the whole signal. */
+export function chromagram(samples: Float32Array, sampleRate: number): Float64Array {
+  const chroma = new Float64Array(12);
+  for (const f of chromaFrames(samples, sampleRate)) for (let pc = 0; pc < 12; pc++) chroma[pc] += f.chroma[pc];
   return chroma;
 }
 

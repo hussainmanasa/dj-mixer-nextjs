@@ -36,6 +36,13 @@ export interface Mood {
    * mixes out near its end if nobody does — the music never stops.
    */
   holdForDrop?: boolean;
+  /**
+   * Beat-match at half and double tempo too (a 64 BPM ballad against a 128 BPM
+   * party track: one ballad beat per two party beats). Common in Bollywood sets.
+   */
+  halfTime?: boolean;
+  /** On a big tempo jump, rewind (spin back) the outgoing song instead of echoing it out. */
+  rewind?: boolean;
 }
 
 /** Result of offline audio analysis (lib/analysis). Times are track seconds. */
@@ -67,6 +74,17 @@ export interface TrackAnalysis {
   keyConfidence?: number;
   /** Per-track drop-detection threshold from the admin (TrackOverrides.fullLevel). */
   fullLevel?: number;
+  /** Markers the analysis suggests (version 4+). Never used until the admin accepts them. */
+  suggestedHook?: SuggestedRange | null;
+  suggestedDialogue?: SuggestedRange | null;
+}
+
+/** A marker suggested by the analysis, in track seconds; the admin accepts it in the track editor. */
+export interface SuggestedRange {
+  start: number;
+  end: number;
+  /** 0..1, how clearly it stood out. */
+  confidence: number;
 }
 
 /** Admin fixes for one track; they survive re-analysis. */
@@ -116,8 +134,9 @@ export interface Track {
 /**
  * `drop`: the next track comes in on its drop (staff Drop, drop swaps).
  * `dialogue`: the next track's dialogue plays, then it jumps straight to its drop.
+ * `rewind`: the outgoing track spins back, then the next one hits (big tempo jumps).
  */
-export type TransitionKind = "blend" | "filterSweep" | "echoOut" | "cut" | "drop" | "dialogue";
+export type TransitionKind = "blend" | "filterSweep" | "echoOut" | "cut" | "drop" | "dialogue" | "rewind";
 
 /** Song markers, in track seconds. Set by the admin in the track editor; they survive re-analysis. */
 export interface TrackCues {

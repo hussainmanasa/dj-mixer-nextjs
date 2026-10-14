@@ -4,7 +4,7 @@
 // is over, so the caller can hand over control.
 
 import type { TransitionKind } from "@/lib/types";
-import { Deck, EQ_KILL_DB } from "./deck";
+import { Deck, EQ_KILL_DB, REWIND_SECONDS } from "./deck";
 
 export interface TransitionPlan {
   kind: TransitionKind;
@@ -172,6 +172,26 @@ export function dialogueIn(out: Deck, inc: Deck, t: number, drop: number, outBea
 
   // Hand over once the outgoing deck is out (the incoming deck jumps by itself).
   return { kind: "dialogue", start: t, end: t + 4 * outBeatSec, drop };
+}
+
+/** Seconds a rewind takes before the next track (or its dialogue) comes in. */
+export const REWIND_LEAD = REWIND_SECONDS;
+
+/**
+ * Rewind (spinback) for big tempo jumps in moods with `rewind`: at `t` the
+ * outgoing track is cut and spins back (`Deck.rewind`); REWIND_LEAD later the
+ * incoming deck comes in at full level — on its drop, or on a dialogue that
+ * then drops (`kind` "dialogue", `drop` when it lands).
+ */
+export function rewindInto(out: Deck, inc: Deck, t: number, kind: "rewind" | "dialogue" = "rewind", drop?: number): TransitionPlan {
+  out.fader.gain.setValueAtTime(1, t - 0.01);
+  out.fader.gain.linearRampToValueAtTime(0, t + 0.02);
+  out.rewind(t);
+  const start = t + REWIND_LEAD;
+  inc.resetControls(0);
+  inc.fader.gain.setValueAtTime(0, start - 0.01);
+  inc.fader.gain.linearRampToValueAtTime(1, start + 0.01);
+  return { kind, start, end: start + 0.1, drop: drop ?? start };
 }
 
 /** Hard cut on a downbeat — the fallback when a beat grid can't be trusted. */

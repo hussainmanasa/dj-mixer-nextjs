@@ -12,7 +12,7 @@ import { AudioEngine } from "@/lib/audio/engine";
 import type { Deck } from "@/lib/audio/deck";
 import type { FxKind } from "@/lib/audio/fx";
 import { libraryLoudness } from "@/lib/analysis/loudness";
-import { blend, cut, dialogueIn, dropIn, echoOut, filterSweep, type TransitionPlan } from "@/lib/audio/transitions";
+import { blend, cut, dialogueIn, dropIn, echoOut, filterSweep, REWIND_LEAD, rewindInto, type TransitionPlan } from "@/lib/audio/transitions";
 import type { EntryChoice, Mood, MoodId, Track, TransitionKind } from "@/lib/types";
 import { defaultStart, openerWindow, resolveEntry } from "./cues";
 import { getMood, targetEnergy } from "./moods";
@@ -21,11 +21,11 @@ import { barSeconds, BEATS_PER_BAR, dropBuildBars, mixOutPoint, nextBoundary, ne
 import {
   chooseTransition,
   isMoodJump,
-  MAX_SYNC_DELTA,
   MIN_BLEND_CONFIDENCE,
   pickNext,
   pickOpener,
   rankForRequest,
+  syncRatio,
   type RequestOption,
   type SelectionContext,
 } from "./selector";
@@ -511,7 +511,7 @@ export class AutoDJ {
     const opener = this.openerEnd !== null;
     // Desi Night holds each song (after the opener) until Drop; it still leaves near the end on its own.
     const holding = !!mood.holdForDrop && !opener && !staffDrop;
-    const planned: TransitionKind = chooseTransition(cur.track, track, curBpm, this.jump);
+    const planned: TransitionKind = chooseTransition(cur.track, track, curBpm, this.jump, mood.halfTime);
     const bars = planned === "blend" ? mood.blendBars : 8;
     // Bars from the transition's start to its hand-over, which should land
     // where the outgoing track breaks down: a blend's bass swap is halfway,
@@ -544,11 +544,13 @@ export class AutoDJ {
       const outBpm = a.bpm * tl.rateAt(t);
       const outBeat = 60 / outBpm;
       synced = planned === "blend" || planned === "filterSweep";
-      rate = synced ? outBpm / b.bpm : 1;
+      // ×1, or ×2 / ×½ in half-time moods (each incoming beat spans two outgoing beats, or half of one).
+      rate = synced ? outBpm / (b.bpm * (syncRatio(outBpm, b.bpm, mood.halfTime) ?? 1)) : 1;
       startAt = entry.kind === "auto" ? defaultStart(track) : resolved.land;
       if (planned === "blend") plan = blend(cur.deck, inc, t, bars, outBeat);
       else if (planned === "filterSweep") plan = filterSweep(cur.deck, inc, t, outBeat);
-      else if (planned === "echoOut") plan = echoOut(cur.deck, inc, t, outBeat);
+      // A tempo jump: rewind moods spin the outgoing track back, others echo it out.
+      else if (planned === "echoOut") plan = mood.rewind ? rewindInto(cur.deck, inc, t) : echoOut(cur.deck, inc, t, outBeat);
       else plan = cut(cur.deck, inc, t);
       inc.start(plan.start, startAt, rate);
     } else {
@@ -565,16 +567,30 @@ export class AutoDJ {
       const outBeat = 60 / outBpm;
       const outBar = 4 * outBeat;
 
+      // Tempos too far apart to beat-match: rewind moods spin the outgoing track back first.
+      const rewind = !!mood.rewind && syncRatio(outBpm, b.bpm, mood.halfTime) === null;
       if (resolved.dialogue) {
         // Dialogue in the clear, then straight to the drop (at the song's own tempo).
         const d = resolved.dialogue;
-        const dropAt = T + (d.end - d.start);
-        plan = dialogueIn(cur.deck, inc, T, dropAt, outBeat);
+        const dialogueAt = rewind ? T + REWIND_LEAD : T;
+        const dropAt = dialogueAt + (d.end - d.start);
+        plan = rewind ? rewindInto(cur.deck, inc, T, "dialogue", dropAt) : dialogueIn(cur.deck, inc, T, dropAt, outBeat);
         startAt = d.start;
-        inc.start(T, d.start, 1, { at: dropAt, to: resolved.land });
+        inc.start(plan.start, d.start, 1, { at: dropAt, to: resolved.land });
+      } else if (rewind) {
+        // Spin back, then the drop hits at the song's own tempo.
+        plan = rewindInto(cur.deck, inc, T);
+        startAt = resolved.land;
+        inc.start(plan.start, startAt, 1);
+        if (staffDrop || opener) {
+          const delay = this.engine.outputDelay;
+          const from = Math.max(now + SCHEDULE_MARGIN, T - 2 * outBar);
+          if (T - from > 1) this.engine.fx.riserBetween(from + delay, T + delay);
+        }
       } else {
-        synced = Math.abs(outBpm / b.bpm - 1) <= MAX_SYNC_DELTA;
-        rate = synced ? outBpm / b.bpm : 1;
+        const ratio = syncRatio(outBpm, b.bpm, mood.halfTime);
+        synced = ratio !== null;
+        rate = ratio ? outBpm / (b.bpm * ratio) : 1;
         const canBuild = synced && a.beatConfidence >= MIN_BLEND_CONFIDENCE && b.beatConfidence >= MIN_BLEND_CONFIDENCE;
         let land = T;
         let build = 0;
@@ -582,6 +598,8 @@ export class AutoDJ {
           // A staff Drop lands on a 4-bar boundary far enough ahead for a build-up.
           if (staffDrop) land = tl.timeAt(nextBoundary(a, tl.positionAt(now + SCHEDULE_MARGIN + MIN_DROP_BUILD_BARS * outBar), DROP_BOUNDARY_BARS));
           build = dropBuildBars(land - (now + SCHEDULE_MARGIN), outBar, resolved.land, rate, MAX_DROP_BUILD_BARS);
+          // At half tempo one incoming bar spans two outgoing bars: keep the build whole incoming bars.
+          if (ratio === 2) build = Math.floor(build / 2) * 2;
         }
         // outBar × rate is one incoming bar, so the offset stays on the incoming grid.
         startAt = resolved.land - build * outBar * rate;

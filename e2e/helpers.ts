@@ -4,9 +4,9 @@ import type { Page } from "@playwright/test";
 import { FIXTURE_DIR } from "./fixtures";
 
 /** Add the fixture tracks for this session and wait until all are analysed. */
-export async function loadLibrary(page: Page): Promise<void> {
+export async function loadLibrary(page: Page, dirs: string[] = [FIXTURE_DIR]): Promise<void> {
   await page.goto("/library");
-  const files = readdirSync(FIXTURE_DIR).map((f) => join(FIXTURE_DIR, f));
+  const files = dirs.flatMap((dir) => readdirSync(dir).map((f) => join(dir, f)));
   await page.setInputFiles('[data-testid="session-files"]', files);
   await page.waitForFunction((n) => new RegExp(`${n} ready`).test(document.body.innerText), files.length, { timeout: 120_000 });
 }

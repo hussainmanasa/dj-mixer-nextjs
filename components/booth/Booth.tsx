@@ -21,6 +21,7 @@ const TRANSITION_LABEL: Record<TransitionKind, string> = {
   cut: "Cut on the downbeat",
   drop: "Drop",
   dialogue: "Dialogue → drop",
+  rewind: "Rewind",
 };
 
 function deckRole(status: AutoDJStatus, deck: number): { role: DeckRole; track: Track | null } {

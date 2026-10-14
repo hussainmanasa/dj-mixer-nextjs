@@ -84,6 +84,9 @@ export const MOODS: Mood[] = [
     // plays until staff press Drop (it still mixes out near its end).
     opener: { crates: ["Romantic"], maxBpm: 105 },
     holdForDrop: true,
+    // Bollywood songs often sit at half tempo; big jumps get the classic rewind.
+    halfTime: true,
+    rewind: true,
   },
 ];
 

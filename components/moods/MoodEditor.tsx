@@ -179,6 +179,20 @@ function MoodCard({ mood, edited, crates }: { mood: Mood; edited: boolean; crate
             </span>
           </span>
         </label>
+        <label className="flex cursor-pointer items-start gap-3">
+          <input type="checkbox" checked={!!draft.halfTime} onChange={(e) => set("halfTime", e.target.checked || undefined)} className="mt-0.5 h-5 w-5 accent-accent" />
+          <span>
+            Match half and double tempo
+            <span className="block text-muted">A 64 BPM song can be beat-matched with a 128 BPM one (one beat per two). Common for Bollywood.</span>
+          </span>
+        </label>
+        <label className="flex cursor-pointer items-start gap-3">
+          <input type="checkbox" checked={!!draft.rewind} onChange={(e) => set("rewind", e.target.checked || undefined)} className="mt-0.5 h-5 w-5 accent-accent" />
+          <span>
+            Rewind on big tempo jumps
+            <span className="block text-muted">When two songs can&apos;t be beat-matched, spin the old one back before the next one hits, instead of an echo-out.</span>
+          </span>
+        </label>
       </div>
 
       <div className="text-sm">
