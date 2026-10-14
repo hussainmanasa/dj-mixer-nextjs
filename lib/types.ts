@@ -43,6 +43,8 @@ export interface Mood {
   halfTime?: boolean;
   /** On a big tempo jump, rewind (spin back) the outgoing song instead of echoing it out. */
   rewind?: boolean;
+  /** The auto-DJ adds master effects to its transitions (reverb/echo at a swap, riser and filter into drops). */
+  autoFx?: boolean;
 }
 
 /** Result of offline audio analysis (lib/analysis). Times are track seconds. */
@@ -135,8 +137,9 @@ export interface Track {
  * `drop`: the next track comes in on its drop (staff Drop, drop swaps).
  * `dialogue`: the next track's dialogue plays, then it jumps straight to its drop.
  * `rewind`: the outgoing track spins back, then the next one hits (big tempo jumps).
+ * `layer`: both songs play together (Layer) until Drop swaps them.
  */
-export type TransitionKind = "blend" | "filterSweep" | "echoOut" | "cut" | "drop" | "dialogue" | "rewind";
+export type TransitionKind = "blend" | "filterSweep" | "echoOut" | "cut" | "drop" | "dialogue" | "rewind" | "layer";
 
 /** Song markers, in track seconds. Set by the admin in the track editor; they survive re-analysis. */
 export interface TrackCues {

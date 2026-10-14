@@ -194,6 +194,51 @@ export function rewindInto(out: Deck, inc: Deck, t: number, kind: "rewind" | "di
   return { kind, start, end: start + 0.1, drop: drop ?? start };
 }
 
+/** Level of a layered song before the swap. */
+const LAYER_LEVEL = 0.85;
+
+/**
+ * Layer (staff pressed Layer): from `t` the incoming song plays over the
+ * current one, beat-matched, with its bass off — its vocals and melody over
+ * the current song's bass and drums — rising to 85% over a bar while the
+ * current song's mids ease down 4 dB to make room. It holds until
+ * `layerSwap` (Drop). The plan has no end until then.
+ */
+export function layerIn(out: Deck, inc: Deck, t: number, outBeatSec: number): TransitionPlan {
+  inc.resetControls(0);
+  inc.low.gain.setValueAtTime(EQ_KILL_DB, t);
+  inc.fader.gain.setValueAtTime(0, t);
+  inc.fader.gain.linearRampToValueAtTime(LAYER_LEVEL, t + 4 * outBeatSec);
+  out.mid.gain.setValueAtTime(0, t);
+  out.mid.gain.linearRampToValueAtTime(-4, t + 4 * outBeatSec);
+  return { kind: "layer", start: t, end: Number.POSITIVE_INFINITY };
+}
+
+/**
+ * Ends a layer (Drop): at `t` the basslines swap in one beat — the layered
+ * song takes over at full level — and the old song fades out over 2 bars
+ * under a rising high-pass, like a drop swap's fade. `start` is when the
+ * layer began.
+ */
+export function layerSwap(out: Deck, inc: Deck, start: number, t: number, outBeatSec: number): TransitionPlan {
+  out.low.gain.setValueAtTime(0, t - outBeatSec);
+  out.low.gain.linearRampToValueAtTime(EQ_KILL_DB, t);
+  inc.low.gain.setValueAtTime(EQ_KILL_DB, t - outBeatSec);
+  inc.low.gain.linearRampToValueAtTime(0, t);
+  inc.fader.gain.setValueAtTime(LAYER_LEVEL, t);
+  inc.fader.gain.linearRampToValueAtTime(1, t + 0.05);
+  const end = t + 8 * outBeatSec;
+  // Switch the filter type now at an inaudible cut-off; the sweep is scheduled.
+  out.filter.type = "highpass";
+  out.filter.frequency.cancelScheduledValues(0);
+  out.filter.frequency.setValueAtTime(10, 0);
+  out.filter.frequency.setValueAtTime(10, t);
+  out.filter.frequency.exponentialRampToValueAtTime(2000, end);
+  out.fader.gain.setValueAtTime(1, t);
+  out.fader.gain.linearRampToValueAtTime(0, end);
+  return { kind: "layer", start, end, drop: t };
+}
+
 /** Hard cut on a downbeat — the fallback when a beat grid can't be trusted. */
 export function cut(out: Deck, inc: Deck, t: number): TransitionPlan {
   out.fader.gain.setValueAtTime(1, t - 0.01);

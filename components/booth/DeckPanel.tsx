@@ -10,7 +10,8 @@ import { JogWheel } from "./JogWheel";
 import { DECK_LETTERS } from "./theme";
 import { TrackOverview } from "./TrackOverview";
 
-export type DeckRole = "live" | "incoming" | "standby" | "idle";
+/** `loaded`: staff loaded a song before Play. */
+export type DeckRole = "live" | "incoming" | "standby" | "idle" | "loaded";
 
 const ENTRY_LABEL: Record<EntryChoice["kind"], string> = {
   auto: "Auto",
@@ -26,6 +27,7 @@ const ROLE_LABEL: Record<DeckRole, string> = {
   incoming: "Cued",
   standby: "Standby",
   idle: "Empty",
+  loaded: "Loaded",
 };
 
 /**
@@ -39,6 +41,7 @@ export function DeckPanel({
   track,
   color,
   onChoose,
+  onEject,
   keyLock = false,
   entry,
 }: {
@@ -47,6 +50,8 @@ export function DeckPanel({
   track: Track | null;
   color: string;
   onChoose?: { label: string; open: () => void };
+  /** Take a song loaded before Play off the deck. */
+  onEject?: () => void;
   /** Key-lock is running: tempo changes don't change pitch. */
   keyLock?: boolean;
   /** Cued deck only: where the song comes in ("Start from"), and how to change it. */
@@ -66,8 +71,8 @@ export function DeckPanel({
     const view = snap?.decks[deck] ?? null;
     let label = ROLE_LABEL[role];
     if (snap?.mix && snap.now >= snap.mix.start) {
-      if (role === "incoming") label = "Mixing in";
-      if (role === "live") label = "Mixing out";
+      if (role === "incoming") label = snap.layering ? "Layered" : "Mixing in";
+      if (role === "live" && !snap.layering) label = "Mixing out";
     }
     setText(badge.current, label);
     // Once this deck's mix is (about to be) under way, its track can't change.
@@ -88,7 +93,7 @@ export function DeckPanel({
     }
   });
 
-  const active = role === "live" || role === "incoming";
+  const active = role === "live" || role === "incoming" || role === "loaded";
   return (
     <section
       aria-label={`Deck ${DECK_LETTERS[deck]}`}
@@ -113,7 +118,7 @@ export function DeckPanel({
         <span
           ref={badge}
           className="rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wider"
-          style={role === "live" ? { background: color, color: "#07070b" } : { background: "var(--surface-2)", color: "var(--muted)" }}
+          style={role === "live" || role === "loaded" ? { background: color, color: "#07070b" } : { background: "var(--surface-2)", color: "var(--muted)" }}
         >
           {ROLE_LABEL[role]}
         </span>
@@ -149,11 +154,18 @@ export function DeckPanel({
             <p className="truncate text-xl font-semibold">{track?.title ?? "—"}</p>
             <p className="truncate text-muted">{track ? track.artist || "Unknown artist" : "Waiting for a track"}</p>
           </div>
-          {onChoose && (
-            <button ref={choose} type="button" onClick={onChoose.open} className="btn shrink-0">
-              {onChoose.label}
-            </button>
-          )}
+          <div className="flex shrink-0 gap-1.5">
+            {onChoose && (
+              <button ref={choose} type="button" onClick={onChoose.open} className="btn">
+                {onChoose.label}
+              </button>
+            )}
+            {onEject && (
+              <button type="button" onClick={onEject} className="btn" aria-label={`Eject Deck ${DECK_LETTERS[deck]}`}>
+                Eject
+              </button>
+            )}
+          </div>
         </div>
         <p className="mt-1 flex justify-between font-mono text-sm text-muted">
           <span>{track?.camelot ?? "key —"}</span>

@@ -63,6 +63,7 @@ const HOW: Record<SetLogEntry["how"], string> = {
   drop: "Drop swap",
   dialogue: "Dialogue then drop",
   rewind: "Rewind",
+  layer: "Layered, then swapped",
 };
 
 /** CSV with a header row, one line per track played. */

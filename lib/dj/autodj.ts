@@ -12,13 +12,26 @@ import { AudioEngine } from "@/lib/audio/engine";
 import type { Deck } from "@/lib/audio/deck";
 import type { FxKind } from "@/lib/audio/fx";
 import { libraryLoudness } from "@/lib/analysis/loudness";
-import { blend, cut, dialogueIn, dropIn, echoOut, filterSweep, REWIND_LEAD, rewindInto, type TransitionPlan } from "@/lib/audio/transitions";
+import {
+  blend,
+  cut,
+  dialogueIn,
+  dropIn,
+  echoOut,
+  filterSweep,
+  layerIn,
+  layerSwap,
+  REWIND_LEAD,
+  rewindInto,
+  type TransitionPlan,
+} from "@/lib/audio/transitions";
 import type { EntryChoice, Mood, MoodId, Track, TransitionKind } from "@/lib/types";
-import { defaultStart, openerWindow, resolveEntry } from "./cues";
+import { defaultStart, firstStart, layerEntry, openerWindow, resolveEntry, type FirstStart } from "./cues";
 import { getMood, targetEnergy } from "./moods";
 import { drops } from "@/lib/analysis/structure";
 import { barSeconds, BEATS_PER_BAR, dropBuildBars, mixOutPoint, nextBoundary, nextDownbeat } from "./mixpoints";
 import {
+  canLayer,
   chooseTransition,
   isMoodJump,
   MIN_BLEND_CONFIDENCE,
@@ -67,6 +80,8 @@ export interface UpNext {
   startAt: number;
   /** Desi Night: this mix only happens on Drop (or by itself near the end of the song). */
   holding: boolean;
+  /** It can be layered over the playing song now (tempo and key match). */
+  layerable: boolean;
 }
 
 export interface Standby {
@@ -103,6 +118,18 @@ export interface DeckView {
   bassDb: number;
 }
 
+/** A deck loaded before Play: its song and how it should start / come in. */
+export interface Preload {
+  track: Track;
+  entry: EntryChoice;
+}
+
+/** What staff loaded before Play: Deck A plays first, the rest come in order after it. */
+export interface StartPreset {
+  first?: Preload;
+  next: Preload[];
+}
+
 export interface BoothSnapshot {
   /** AudioContext time. */
   now: number;
@@ -113,6 +140,10 @@ export interface BoothSnapshot {
   mixOutPosition: number | null;
   /** The live deck is still playing a dialogue before its drop: Drop waits. */
   dropLocked: boolean;
+  /** Effects sounding right now, and whether the auto-DJ fired them. */
+  activeFx: { kind: FxKind; auto: boolean }[];
+  /** Two songs are layered and waiting for Drop to swap them. */
+  layering: boolean;
 }
 
 export interface AutoDJDeps {
@@ -137,6 +168,10 @@ interface Planned {
   entry: EntryChoice;
   startAt: number;
   holding: boolean;
+  /** The auto-DJ scheduled effects for this transition (cancelled if it's re-planned). */
+  fx: boolean;
+  /** A layer (staff pressed Layer): it plays over the current song until Drop swaps them. */
+  layer?: { rate: number };
 }
 
 interface Loaded {
@@ -167,6 +202,10 @@ export class AutoDJ {
   private dropRequested = false;
   /** Tracks staff requested; they play before the auto-DJ's own picks. */
   private requests: Track[] = [];
+  /** How a queued track should come in (decks loaded before Play keep their "Start from"). */
+  private requestEntries = new Map<string, EntryChoice>();
+  /** Effects scheduled or sounding, in master (context) time, for the booth's FX pad. */
+  private fxWindows: { kind: FxKind; start: number; end: number; auto: boolean }[] = [];
   /** While the set opener plays: the track position where it auto-drops into the party. */
   private openerEnd: number | null = null;
   private planning = false;
@@ -205,7 +244,12 @@ export class AutoDJ {
 
   // ── Public controls ────────────────────────────────────────────────────────
 
-  async start(): Promise<void> {
+  /**
+   * Start the set. With a `preset` (decks staff loaded before Play), Deck A's
+   * song plays first from its chosen start and the others come in next, in
+   * order, each the way staff chose; then the auto-DJ carries on by itself.
+   */
+  async start(preset?: StartPreset): Promise<void> {
     if (this.playing) return;
     await this.engine.resume();
     if (this.keyLock && !this.keyLockReady) {
@@ -216,13 +260,23 @@ export class AutoDJ {
     this.error = null;
     this.generation++;
     const gen = this.generation;
-    // Moods with an opener (Desi Night) start the set with a slow song's hook.
-    const opener = pickOpener(this.deps.getTracks(), this.mood);
+    // Decks loaded before Play come next, in order, ahead of any other requests.
+    for (const p of [...(preset?.next ?? [])].reverse()) {
+      this.requests = this.requests.filter((t) => t.id !== p.track.id);
+      this.requests.unshift(p.track);
+      this.requestEntries.set(p.track.id, p.entry);
+    }
+    const loadedFirst = preset?.first;
+    const loadedBuffer = loadedFirst ? await this.decodeTrack(loadedFirst.track) : null;
+    // Otherwise moods with an opener (Desi Night) start the set with a slow song's hook.
+    const opener = loadedBuffer ? null : pickOpener(this.deps.getTracks(), this.mood);
     const openerBuffer = opener ? await this.decodeTrack(opener) : null;
     const first: Loaded | null =
-      opener && openerBuffer
-        ? { track: opener, buffer: openerBuffer, requested: false }
-        : await this.loadNextTrack(this.selectionContext(), new Set(), true);
+      loadedFirst && loadedBuffer
+        ? { track: loadedFirst.track, buffer: loadedBuffer, requested: true }
+        : opener && openerBuffer
+          ? { track: opener, buffer: openerBuffer, requested: false }
+          : await this.loadNextTrack(this.selectionContext(), new Set(), true);
     if (!first || gen !== this.generation) {
       if (first?.requested) this.requests.unshift(first.track);
       this.playing = false;
@@ -234,10 +288,16 @@ export class AutoDJ {
     deck.load(first.track, first.buffer, this.loudnessTarget());
     deck.resetControls(1);
     const when = this.engine.now + 0.1;
-    const isOpener = first.track === opener;
-    const window = isOpener ? openerWindow(first.track) : null;
-    deck.start(when, window ? window.start : defaultStart(first.track), 1);
-    this.openerEnd = window ? window.end : null;
+    // Where it starts: staff's choice for a loaded deck; the hook for an opener.
+    const fs: FirstStart =
+      loadedFirst && first.track === loadedFirst.track
+        ? firstStart(first.track, loadedFirst.entry, !!this.mood.opener)
+        : first.track === opener
+          ? (({ start, end }) => ({ start, openerEnd: end }))(openerWindow(first.track))
+          : { start: defaultStart(first.track) };
+    deck.start(when, fs.start, 1, fs.jump && { at: when + fs.jump.after, to: fs.jump.to });
+    this.openerEnd = fs.openerEnd ?? null;
+    const isOpener = this.openerEnd !== null;
     // Pick the party track against the mood's tempo, not the slow opener's.
     this.jump = isOpener;
     if (isOpener) this.note = `Opening with the hook of ${first.track.title}`;
@@ -257,6 +317,7 @@ export class AutoDJ {
     this.stopWatchdog();
     this.dropRequested = false;
     this.openerEnd = null;
+    this.fxWindows = [];
     await this.engine.fadeOutAndStop(STOP_FADE_SECONDS);
     for (const d of this.engine.decks) d.unload();
     this.current = null;
@@ -297,6 +358,8 @@ export class AutoDJ {
    */
   drop(): boolean {
     if (!this.playing || !this.current || this.recovering) return false;
+    // Two songs layered: Drop swaps them.
+    if (this.planned?.layer) return this.finishLayer();
     // The live song is still in its dialogue: let it reach its drop first.
     if (this.current.deck.pendingJump() !== null) return false;
     const p = this.planned;
@@ -307,6 +370,47 @@ export class AutoDJ {
     if (up) this.schedule(up.track, up.buffer, up.requested, up.entry);
     // Still choosing / decoding: schedule() picks the request up.
     else void this.planNext();
+    return true;
+  }
+
+  /**
+   * Staff pressed Layer: from the next phrase, `track` (default: the cued
+   * song) plays over the current one, beat-matched, its bass off, until Drop
+   * swaps them (or, if nobody does, before either song runs out). Only songs
+   * that match in tempo and key (`canLayer`); false otherwise, or while a mix
+   * or a dialogue is under way.
+   */
+  layer(track?: Track): boolean {
+    const cur = this.current;
+    if (!this.playing || !cur || this.recovering || this.planning || cur.deck.pendingJump() !== null) return false;
+    const p = this.planned;
+    if (p && (p.layer || p.plan.start <= this.engine.now + SCHEDULE_MARGIN)) return false;
+    const target = track ?? p?.track;
+    const curBpm = this.currentBpm();
+    if (!target || curBpm === null || !canLayer(cur.track, target, curBpm, this.mood.halfTime)) return false;
+    const up = this.unplan();
+    if (up && up.track.id === target.id) {
+      this.scheduleLayer(up.track, up.buffer, up.requested, up.entry);
+      return true;
+    }
+    // A different song: the cued one goes back to the queue if staff asked for it.
+    if (up?.requested) {
+      this.requests.unshift(up.track);
+      this.requestEntries.set(up.track.id, up.entry);
+    }
+    this.requests = this.requests.filter((t) => t.id !== target.id);
+    const gen = this.generation;
+    this.planning = true;
+    void this.decodeTrack(target)
+      .then((buffer) => {
+        if (gen !== this.generation || !this.playing || this.planned) return;
+        if (buffer) this.scheduleLayer(target, buffer, true, { kind: "auto" });
+        else void this.planNext();
+      })
+      .finally(() => {
+        this.planning = false;
+        if (!this.planned) void this.planNext();
+      });
     return true;
   }
 
@@ -333,7 +437,7 @@ export class AutoDJ {
     p.deck.stopNow();
     p.deck.resetControls(0);
     this.planned = null;
-    if (p.plan.kind === "drop") this.engine.fx.stopRiser();
+    this.cancelTransitionFx(p);
     // The planned mix hasn't started: drop its automation, keep the music at full level.
     this.current?.deck.resetControls(1);
     return { track: p.track, buffer, requested: p.requested, entry: p.entry };
@@ -366,6 +470,7 @@ export class AutoDJ {
   /** Remove a track from the request queue. */
   unrequest(trackId: string): void {
     this.requests = this.requests.filter((t) => t.id !== trackId);
+    this.requestEntries.delete(trackId);
     this.emit();
   }
 
@@ -393,7 +498,8 @@ export class AutoDJ {
     const pos = tl.positionAt(this.engine.now + 0.05 - delay);
     const target = nextBoundary(a, pos, kind === "riser" ? 1 : 1 / BEATS_PER_BAR);
     const t = tl.timeAt(target);
-    this.engine.fx.trigger(kind, t + delay, 60 / (a.bpm * tl.rateAt(t)));
+    const end = this.engine.fx.trigger(kind, t + delay, 60 / (a.bpm * tl.rateAt(t)));
+    this.noteFx(kind, t + delay, end, false);
   }
 
   async dispose(): Promise<void> {
@@ -478,7 +584,9 @@ export class AutoDJ {
         this.emit();
         return;
       }
-      this.schedule(loaded.track, loaded.buffer, loaded.requested);
+      const entry = (loaded.requested && this.requestEntries.get(loaded.track.id)) || { kind: "auto" as const };
+      this.requestEntries.delete(loaded.track.id);
+      this.schedule(loaded.track, loaded.buffer, loaded.requested, entry);
       void this.prepareStandby();
     } finally {
       this.planning = false;
@@ -533,6 +641,9 @@ export class AutoDJ {
     let rate = 1;
     let synced = false;
     let startAt: number;
+    // Outgoing beat length at the transition, and whether a riser is already on (for auto effects).
+    let beat = 60 / curBpm;
+    let riser = false;
 
     if (!landing) {
       let mixPos = mixOutPoint(a, bars, earliest, mood, leadBars);
@@ -543,6 +654,7 @@ export class AutoDJ {
       }
       const outBpm = a.bpm * tl.rateAt(t);
       const outBeat = 60 / outBpm;
+      beat = outBeat;
       synced = planned === "blend" || planned === "filterSweep";
       // ×1, or ×2 / ×½ in half-time moods (each incoming beat spans two outgoing beats, or half of one).
       rate = synced ? outBpm / (b.bpm * (syncRatio(outBpm, b.bpm, mood.halfTime) ?? 1)) : 1;
@@ -566,6 +678,7 @@ export class AutoDJ {
       const outBpm = a.bpm * tl.rateAt(T);
       const outBeat = 60 / outBpm;
       const outBar = 4 * outBeat;
+      beat = outBeat;
 
       // Tempos too far apart to beat-match: rewind moods spin the outgoing track back first.
       const rewind = !!mood.rewind && syncRatio(outBpm, b.bpm, mood.halfTime) === null;
@@ -582,11 +695,7 @@ export class AutoDJ {
         plan = rewindInto(cur.deck, inc, T);
         startAt = resolved.land;
         inc.start(plan.start, startAt, 1);
-        if (staffDrop || opener) {
-          const delay = this.engine.outputDelay;
-          const from = Math.max(now + SCHEDULE_MARGIN, T - 2 * outBar);
-          if (T - from > 1) this.engine.fx.riserBetween(from + delay, T + delay);
-        }
+        if (staffDrop || opener) riser = this.riser(Math.max(now + SCHEDULE_MARGIN, T - 2 * outBar), T, !staffDrop);
       } else {
         const ratio = syncRatio(outBpm, b.bpm, mood.halfTime);
         synced = ratio !== null;
@@ -606,11 +715,7 @@ export class AutoDJ {
         plan = dropIn(cur.deck, inc, land - build * outBar, land, outBeat);
         inc.start(plan.start, startAt, rate);
         // A staff Drop or the opener's auto-drop gets a noise riser that peaks as the drop hits.
-        if (staffDrop || opener) {
-          const from = build > 0 ? plan.start : Math.max(now + SCHEDULE_MARGIN, land - 2 * outBar);
-          const delay = this.engine.outputDelay;
-          if (land - from > 1) this.engine.fx.riserBetween(from + delay, land + delay);
-        }
+        if (staffDrop || opener) riser = this.riser(build > 0 ? plan.start : Math.max(now + SCHEDULE_MARGIN, land - 2 * outBar), land, !staffDrop);
       }
     }
 
@@ -620,9 +725,125 @@ export class AutoDJ {
     }
     // The outgoing deck is silent from plan.end; handover() stops and unloads it.
 
+    const fx = mood.autoFx ? this.transitionFx(plan, beat, riser) : false;
     const timer = setTimeout(() => this.handover(), Math.max(0, (plan.end - this.engine.now) * 1000) + 60);
-    this.planned = { deck: inc, track, plan, timer, requested, staffDrop, entry, startAt, holding };
+    this.planned = { deck: inc, track, plan, timer, requested, staffDrop, entry, startAt, holding, fx };
     this.emit();
+  }
+
+  // ── Effects ─────────────────────────────────────────────────────────────────
+
+  /** A noise riser peaking at deck time `to`; false if there's under a second for it. */
+  private riser(from: number, to: number, auto: boolean): boolean {
+    if (to - from <= 1) return false;
+    const delay = this.engine.outputDelay;
+    this.noteFx("riser", from + delay, this.engine.fx.riserBetween(from + delay, to + delay), auto);
+    return true;
+  }
+
+  /**
+   * Effects the auto-DJ adds to a transition (moods with `autoFx`), timed on
+   * the outgoing beat and heard on the master: a reverb or echo throw at a
+   * blend's bass swap (alternating), a riser and a closing filter into a
+   * drop, a reverb wash on a cut. Dialogue drops and rewinds stay clean.
+   * Returns whether anything was scheduled.
+   */
+  private transitionFx(plan: TransitionPlan, beat: number, riserOn: boolean): boolean {
+    const fx = this.engine.fx;
+    const delay = this.engine.outputDelay;
+    const at = (t: number) => t + delay;
+    switch (plan.kind) {
+      case "blend": {
+        const swap = (plan.start + plan.end) / 2;
+        const kind: FxKind = this.moodTrackIndex % 2 ? "reverb" : "echo";
+        this.noteFx(kind, at(swap - beat), fx.trigger(kind, at(swap - beat), beat), true);
+        return true;
+      }
+      case "drop": {
+        if (plan.drop === undefined) return false;
+        if (!riserOn && plan.drop - plan.start > 2) {
+          this.noteFx("riser", at(plan.start), fx.riserBetween(at(plan.start), at(plan.drop)), true);
+        }
+        const from = Math.max(this.engine.now + 0.2, plan.drop - 4 * beat);
+        this.noteFx("filter", at(from), fx.filterInto(at(from), at(plan.drop)), true);
+        return true;
+      }
+      case "cut":
+        this.noteFx("reverb", at(plan.start), fx.trigger("reverb", at(plan.start), beat), true);
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /** The re-planned transition's effects: cancel them (and their FX-pad windows). */
+  private cancelTransitionFx(p: Planned): void {
+    if (!p.fx && p.plan.kind !== "drop" && p.plan.kind !== "rewind") return;
+    this.engine.fx.cancelScheduled();
+    const now = this.engine.now;
+    this.fxWindows = this.fxWindows.filter((w) => w.end <= now);
+  }
+
+  private noteFx(kind: FxKind, start: number, end: number, auto: boolean): void {
+    const now = this.engine.now;
+    this.fxWindows = [...this.fxWindows.filter((w) => w.end > now), { kind, start, end, auto }];
+  }
+
+  /** Start a layer on the next 4-bar phrase; arm the safety swap before either song runs out. */
+  private scheduleLayer(track: Track, buffer: AudioBuffer, requested: boolean, entry: EntryChoice): void {
+    const cur = this.current!;
+    const a = cur.track.analysis!;
+    const b = track.analysis!;
+    const tl = cur.deck.timeline!;
+    const now = this.engine.now;
+    const earliest = tl.positionAt(now + SCHEDULE_MARGIN);
+    const t = tl.timeAt(nextBoundary(a, earliest, DROP_BOUNDARY_BARS));
+    const outBpm = a.bpm * tl.rateAt(t);
+    const outBeat = 60 / outBpm;
+    const rate = outBpm / (b.bpm * (syncRatio(outBpm, b.bpm, this.mood.halfTime) ?? 1));
+    const startAt = layerEntry(track, entry);
+
+    const inc = this.engine.freeDeck([cur.deck, ...(this.standby ? [this.standby.deck] : [])]);
+    if (!inc) return;
+    inc.load(track, buffer, this.loudnessTarget());
+    const plan = layerIn(cur.deck, inc, t, outBeat);
+    inc.start(t, startAt, rate);
+
+    // Safety: swap by itself well before the current song's outro or the layered song's end.
+    const outroAt = tl.timeAt(mixOutPoint(a, 8, earliest));
+    const layeredEnds = t + (b.duration - startAt) / rate - 32 * outBeat;
+    const safety = Math.min(outroAt, layeredEnds);
+    const timer = setTimeout(() => this.finishLayer(), Math.max(0, (safety - SCHEDULE_MARGIN - 1 - this.engine.now) * 1000));
+    this.planned = { deck: inc, track, plan, timer, requested, staffDrop: false, entry, startAt, holding: false, fx: false, layer: { rate } };
+    this.note = `Layering ${track.title} — press Drop to swap`;
+    this.emit();
+  }
+
+  /** End a layer: swap the basslines on the next 4-bar phrase and let the old song fade. */
+  private finishLayer(): boolean {
+    const p = this.planned;
+    const cur = this.current;
+    if (!p?.layer || p.plan.drop !== undefined || !cur?.deck.timeline || !this.playing) return false;
+    const a = cur.track.analysis!;
+    const tl = cur.deck.timeline;
+    const now = this.engine.now;
+    // Not before the layer has actually started.
+    const from = Math.max(now + SCHEDULE_MARGIN, p.plan.start + 0.1);
+    const t = tl.timeAt(nextBoundary(a, tl.positionAt(from), DROP_BOUNDARY_BARS));
+    const outBeat = 60 / (a.bpm * tl.rateAt(t));
+    clearTimeout(p.timer);
+    p.plan = layerSwap(cur.deck, p.deck, p.plan.start, t, outBeat);
+    if (Math.abs(p.layer.rate - 1) > 0.001) {
+      p.deck.rampRate(p.plan.end, p.plan.end + TEMPO_HANDBACK_BARS * 4 * outBeat, 1);
+    }
+    if (this.mood.autoFx) {
+      const delay = this.engine.outputDelay;
+      this.noteFx("reverb", t - outBeat + delay, this.engine.fx.trigger("reverb", t - outBeat + delay, outBeat), true);
+    }
+    p.timer = setTimeout(() => this.handover(), Math.max(0, (p.plan.end - this.engine.now) * 1000) + 60);
+    this.note = null;
+    this.emit();
+    return true;
   }
 
   private handover(): void {
@@ -660,9 +881,12 @@ export class AutoDJ {
     p.deck.unload();
     p.deck.resetControls(0);
     this.planned = null;
-    // A re-plan must not lose a staff request, nor keep a riser aimed at the old drop.
-    if (p.requested) this.requests.unshift(p.track);
-    if (p.plan.kind === "drop") this.engine.fx.stopRiser();
+    // A re-plan must not lose a staff request (or how it comes in), nor keep effects aimed at the old mix.
+    if (p.requested) {
+      this.requests.unshift(p.track);
+      this.requestEntries.set(p.track.id, p.entry);
+    }
+    this.cancelTransitionFx(p);
     // Only called before the transition starts: drop the outgoing deck's
     // scheduled automation and keep it playing at full level.
     this.current?.deck.resetControls(1);
@@ -798,6 +1022,10 @@ export class AutoDJ {
       mix: p ? { start: p.plan.start, end: p.plan.end, drop: p.plan.drop } : null,
       mixOutPosition: p && liveTl ? liveTl.positionAt(p.plan.start) : null,
       dropLocked: this.current?.deck.pendingJump(this.engine.now) != null,
+      layering: !!p?.layer && p.plan.drop === undefined && this.engine.now >= p.plan.start,
+      activeFx: this.fxWindows
+        .filter((w) => w.start <= this.engine.now && this.engine.now < w.end)
+        .map(({ kind, auto }) => ({ kind, auto })),
     };
   }
 
@@ -825,6 +1053,11 @@ export class AutoDJ {
             entry: p.entry,
             startAt: p.startAt,
             holding: p.holding,
+            layerable:
+              !p.layer &&
+              !!c &&
+              this.currentBpm() !== null &&
+              canLayer(c.track, p.track, this.currentBpm()!, this.mood.halfTime),
           }
         : null,
       queue: [...this.requests],

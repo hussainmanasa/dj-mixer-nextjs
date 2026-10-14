@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { SCHEDULE_MARGIN, STOP_FADE_SECONDS, type AutoDJStatus } from "@/lib/dj/autodj";
+import { firstStart, resolveEntry } from "@/lib/dj/cues";
 import { gridPosition, PHRASE_BARS } from "@/lib/dj/mixpoints";
 
 import type { Track, TransitionKind } from "@/lib/types";
@@ -22,6 +23,7 @@ const TRANSITION_LABEL: Record<TransitionKind, string> = {
   drop: "Drop",
   dialogue: "Dialogue → drop",
   rewind: "Rewind",
+  layer: "Layer",
 };
 
 function deckRole(status: AutoDJStatus, deck: number): { role: DeckRole; track: Track | null } {
@@ -62,7 +64,10 @@ export function Booth() {
   }, [canPlay, folderState, resumeAvailable, tryAutoResume]);
 
   // Track picker: `next` replaces the cued track, otherwise it adds to the queue.
-  const [picker, setPicker] = useState<{ next: boolean } | null>(null);
+  const [picker, setPicker] = useState<{ next: boolean; loadDeck?: number; layer?: boolean } | null>(null);
+  const preloads = useSession((s) => s.preloads);
+  const ejectDeck = useSession((s) => s.ejectDeck);
+  const setPreloadEntry = useSession((s) => s.setPreloadEntry);
   const closePicker = useCallback(() => setPicker(null), []);
 
   const moods = useMoods();
@@ -72,6 +77,34 @@ export function Booth() {
   const live = status.playing && !stopping;
   const deckCount = status.playing ? status.deckCount : settingsDecks;
   const decks = Array.from({ length: deckCount }, (_, i) => {
+    // Before Play, staff can load a song into any deck (Deck A plays first, the rest next in order).
+    const preload = !status.playing && !starting ? (preloads[i] ?? null) : null;
+    if (!status.playing && !starting) {
+      return (
+        <DeckPanel
+          key={i}
+          deck={i}
+          role={preload ? "loaded" : "idle"}
+          track={preload?.track ?? null}
+          color={color}
+          onChoose={canPlay ? { label: preload ? "Change" : "Load track", open: () => setPicker({ next: false, loadDeck: i }) } : undefined}
+          onEject={preload ? () => ejectDeck(i) : undefined}
+          entry={
+            preload
+              ? {
+                  choice: preload.entry,
+                  // Deck A: where the set starts. Later decks: where they'll come in (before any build-up).
+                  startAt:
+                    i === 0
+                      ? firstStart(preload.track, preload.entry, !!mood.opener).start
+                      : ((e) => e.dialogue?.start ?? e.land)(resolveEntry(preload.track, preload.entry)),
+                  set: (choice) => setPreloadEntry(i, choice),
+                }
+              : undefined
+          }
+        />
+      );
+    }
     const { role, track } = deckRole(status, i);
     const choose =
       role === "live" || !canPlay || stopping
@@ -104,6 +137,7 @@ export function Booth() {
         onStop={stop}
       />
       <DropButton status={status} live={live} color={color} />
+      <LayerButton status={status} live={live} color={color} onPick={() => setPicker({ next: false, layer: true })} />
       <FxPad enabled={live && !!status.now} color={color} />
       <LevelMeter color={color} />
       {status.now && <BeatCounter deck={status.now.deck} track={status.now.track} color={color} />}
@@ -125,7 +159,7 @@ export function Booth() {
   return (
     <main className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col gap-8 px-6 py-8" style={{ "--mood": color } as CSSProperties}>
       <BeatPulse deck={status.now?.deck ?? null} track={status.now?.track ?? null} color={color} />
-      {picker && <TrackPicker next={picker.next} color={color} onClose={closePicker} />}
+      {picker && <TrackPicker next={picker.next} loadDeck={picker.loadDeck} layer={picker.layer} color={color} onClose={closePicker} />}
 
       {resumeAvailable && !status.playing && canPlay && (
         <div className="flex items-center justify-between rounded-xl border border-warn/40 bg-warn/10 px-5 py-4">
@@ -290,16 +324,19 @@ function DropButton({ status, live, color }: { status: AutoDJStatus; live: boole
   const label = useRef<HTMLSpanElement>(null);
   // React state, not a DOM write: React skips onClick when the *prop* says disabled.
   const [busy, setBusy] = useState(false);
-  // A Drop (or drop swap) is armed — not a Desi Night song that's waiting for one.
-  const dropping = (status.next?.transition === "drop" || status.next?.transition === "dialogue") && !status.next.holding;
+  // A Drop (or drop swap, or a layer's swap) is armed — not a Desi Night song that's waiting for one.
+  const layered = status.next?.transition === "layer";
+  const dropping = (status.next?.transition === "drop" || status.next?.transition === "dialogue" || layered) && !status.next?.holding;
   useBoothFrame((snap) => {
     const mix = snap?.mix;
-    // Busy while a mix is under way, or while the live song is still in its dialogue.
-    const nowBusy = (!!mix && snap.now >= mix.start - SCHEDULE_MARGIN) || !!snap?.dropLocked;
+    // Busy while a mix is under way (except a layer waiting for Drop), or while the live song is in its dialogue.
+    const nowBusy = (!!mix && snap.now >= mix.start - SCHEDULE_MARGIN && !snap.layering) || !!snap?.dropLocked;
     if (nowBusy !== busy) setBusy(nowBusy);
     const hits = mix ? (mix.drop ?? mix.start) : 0;
     let text = "Drop";
-    if (dropping && mix && snap.now < hits) text = `Drop in ${formatTime(hits - snap.now)}`;
+    if (snap?.layering) text = "Drop · swap";
+    else if (layered && mix?.drop !== undefined && snap!.now < hits) text = `Swap in ${formatTime(hits - snap!.now)}`;
+    else if (dropping && !layered && mix && snap.now < hits) text = `Drop in ${formatTime(hits - snap.now)}`;
     else if (snap?.dropLocked) text = "Dialogue…";
     else if (nowBusy) text = "Mixing…";
     setText(label.current, text);
@@ -320,6 +357,34 @@ function DropButton({ status, live, color }: { status: AutoDJStatus; live: boole
       }}
     >
       <span ref={label}>Drop</span>
+    </button>
+  );
+}
+
+/**
+ * Layer: play the cued song over the current one (its bass off) until Drop
+ * swaps them. If the cued song doesn't match in tempo and key, pick one that
+ * does. Disabled while a mix or a dialogue is under way, or already layered.
+ */
+function LayerButton({ status, live, color, onPick }: { status: AutoDJStatus; live: boolean; color: string; onPick: () => void }) {
+  const layer = useSession((s) => s.layer);
+  const [busy, setBusy] = useState(false);
+  useBoothFrame((snap) => {
+    const mix = snap?.mix;
+    const nowBusy = (!!mix && snap.now >= mix.start - SCHEDULE_MARGIN) || !!snap?.dropLocked;
+    if (nowBusy !== busy) setBusy(nowBusy);
+  });
+  const layered = status.next?.transition === "layer";
+  return (
+    <button
+      type="button"
+      onClick={() => (status.next?.layerable ? layer() : onPick())}
+      disabled={!live || !status.now || busy || layered}
+      title="Play the next song over this one (its bass off) until Drop swaps them"
+      className="h-11 w-56 rounded-full border text-sm font-bold uppercase tracking-[0.2em] transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-35"
+      style={{ borderColor: color, color }}
+    >
+      {layered ? "Layered" : status.next?.layerable ? "Layer next song" : "Layer…"}
     </button>
   );
 }
@@ -377,13 +442,18 @@ function NextMix({ status, color }: { status: AutoDJStatus; color: string }) {
   useBoothFrame((snap) => {
     const mix = snap?.mix;
     if (!mix) return;
-    if (snap.now < mix.start) {
+    if (snap.layering) {
+      setText(when.current, "layered · Drop to swap");
+      if (progress.current) progress.current.style.transform = "scaleX(0)";
+    } else if (snap.now < mix.start) {
       // Desi Night: the song waits for Drop and only mixes by itself near its end.
       const left = formatTime(mix.start - snap.now);
       setText(when.current, status.next?.holding ? `waits for Drop · auto in ${left}` : `in ${left}`);
       if (progress.current) progress.current.style.transform = "scaleX(0)";
     } else {
-      const p = Math.min(1, (snap.now - mix.start) / Math.max(0.1, mix.end - mix.start));
+      // A layer's swap: progress from the swap, not from when the layer began.
+      const from = status.next?.transition === "layer" && mix.drop !== undefined ? mix.drop : mix.start;
+      const p = Math.min(1, Math.max(0, (snap.now - from) / Math.max(0.1, mix.end - from)));
       setText(when.current, `mixing · ${Math.round(p * 100)}%`);
       if (progress.current) progress.current.style.transform = `scaleX(${p})`;
     }

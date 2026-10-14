@@ -88,3 +88,54 @@ export function validateCues(c: TrackCues, duration: number): string[] {
   if ((c.dialogueStart === undefined) !== (c.dialogueEnd === undefined)) errors.push("Mark both the start and the end of the dialogue.");
   return errors;
 }
+
+/** How the first song of a set starts (a deck loaded before Play). Track seconds. */
+export interface FirstStart {
+  /** Where it starts playing. */
+  start: number;
+  /** A dialogue start: after `after` seconds it jumps to `to` (its drop). */
+  jump?: { after: number; to: number };
+  /** It opens a mood with an opener: it auto-drops into the party at this position (its hook's end). */
+  openerEnd?: number;
+}
+
+/**
+ * Where the set's first song starts, from staff's "Start from" choice.
+ * `opener`: the mood opens with a hook (Desi Night) — then Auto (or Hook)
+ * plays the hook and auto-drops when it ends.
+ */
+export function firstStart(track: Track, choice: EntryChoice = { kind: "auto" }, opener = false): FirstStart {
+  const a = track.analysis!;
+  switch (choice.kind) {
+    case "beginning":
+      return { start: 0 };
+    case "drop":
+      return { start: dropCue(a) };
+    case "bar":
+      return { start: resolveEntry(track, choice).land };
+    case "dialogue": {
+      const d = dialogueOf(track.cues);
+      if (d) return { start: d.start, jump: { after: d.end - d.start, to: dropCue(a) } };
+      return { start: defaultStart(track) };
+    }
+    case "hook":
+    case "auto": {
+      if (opener) {
+        const w = openerWindow(track);
+        return { start: w.start, openerEnd: w.end };
+      }
+      if (choice.kind === "hook") return { start: hookOf(track.cues)?.start ?? defaultStart(track) };
+      return { start: defaultStart(track) };
+    }
+  }
+}
+
+/**
+ * Where a layered song comes in (Layer): its hook — the part worth hearing
+ * over another song — else its drop. A Start from of beginning, drop or a bar
+ * is honoured; a dialogue isn't played under another song.
+ */
+export function layerEntry(track: Track, choice: EntryChoice = { kind: "auto" }): number {
+  if (choice.kind === "beginning" || choice.kind === "drop" || choice.kind === "bar") return resolveEntry(track, choice).land;
+  return hookOf(track.cues)?.start ?? dropCue(track.analysis!);
+}

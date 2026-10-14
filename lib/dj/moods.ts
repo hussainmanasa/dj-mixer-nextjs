@@ -43,6 +43,7 @@ export const MOODS: Mood[] = [
     mixOutAfterDrops: 1,
     maxPlayBars: 112,
     dropSwap: false,
+    autoFx: true,
   },
   {
     id: "peak",
@@ -55,6 +56,7 @@ export const MOODS: Mood[] = [
     mixOutAfterDrops: 1,
     maxPlayBars: 96,
     dropSwap: true,
+    autoFx: true,
   },
   {
     id: "afterhours",
@@ -80,6 +82,7 @@ export const MOODS: Mood[] = [
     mixOutAfterDrops: 1,
     maxPlayBars: 128,
     dropSwap: true,
+    autoFx: true,
     // Opens with a romantic hook, auto-drops into the party, then each song
     // plays until staff press Drop (it still mixes out near its end).
     opener: { crates: ["Romantic"], maxBpm: 105 },

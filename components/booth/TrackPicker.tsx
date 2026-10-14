@@ -9,9 +9,25 @@ import { useSession } from "@/store/session";
  * Staff choose a track. Sorted by how well it fits the mood and the playing
  * track; the auto-DJ still beat-matches it and mixes it in for the mood.
  */
-export function TrackPicker({ next, color, onClose }: { next: boolean; color: string; onClose: () => void }) {
+export function TrackPicker({
+  next,
+  loadDeck,
+  layer,
+  color,
+  onClose,
+}: {
+  next: boolean;
+  /** Load into this deck (before Play) instead of requesting. */
+  loadDeck?: number;
+  /** Pick a song to layer over the playing one: only songs that match its tempo and key. */
+  layer?: boolean;
+  color: string;
+  onClose: () => void;
+}) {
   const rankTracks = useSession((s) => s.rankTracks);
   const request = useSession((s) => s.request);
+  const load = useSession((s) => s.loadDeck);
+  const layerTrack = useSession((s) => s.layer);
   const moodId = useSession((s) => s.status.mood);
   const mood = useMoods().find((m) => m.id === moodId)!;
   const [query, setQuery] = useState("");
@@ -28,9 +44,11 @@ export function TrackPicker({ next, color, onClose }: { next: boolean; color: st
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return options;
-    return options.filter((o) => `${o.track.title} ${o.track.artist}`.toLowerCase().includes(q));
-  }, [options, query]);
+    // Layering two whole songs only works when tempo and key match.
+    const pool = layer ? options.filter((o) => o.layerable) : options;
+    if (!q) return pool;
+    return pool.filter((o) => `${o.track.title} ${o.track.artist}`.toLowerCase().includes(q));
+  }, [options, query, layer]);
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-4 backdrop-blur-sm" onClick={onClose}>
@@ -44,10 +62,18 @@ export function TrackPicker({ next, color, onClose }: { next: boolean; color: st
         <header className="flex items-start justify-between gap-4 border-b border-border px-6 py-5">
           <div>
             <h2 id="picker-title" className="text-xl font-semibold">
-              {next ? "Choose the next track" : "Add a track to the queue"}
+              {layer
+                ? "Layer a song over this one"
+                : loadDeck !== undefined
+                  ? `Load a track into Deck ${"ABCD"[loadDeck]}`
+                  : next
+                    ? "Choose the next track"
+                    : "Add a track to the queue"}
             </h2>
             <p className="mt-1 text-sm text-muted">
-              Best fit for {mood.name} first. The auto-DJ beat-matches it and mixes it in for the mood.
+              {layer
+                ? "Only songs that match the playing one's tempo and key. It plays over this one, bass off, until you press Drop."
+                : `Best fit for ${mood.name} first. The auto-DJ beat-matches it and mixes it in for the mood.`}
             </p>
           </div>
           <button type="button" onClick={onClose} className="btn">
@@ -71,7 +97,9 @@ export function TrackPicker({ next, color, onClose }: { next: boolean; color: st
                 <button
                   type="button"
                   onClick={() => {
-                    request(o.track.id, next);
+                    if (layer) layerTrack(o.track.id);
+                    else if (loadDeck !== undefined) load(loadDeck, o.track.id);
+                    else request(o.track.id, next);
                     onClose();
                   }}
                   className="flex w-full items-center gap-4 rounded-2xl px-3 py-3 text-left hover:bg-surface-2"
@@ -96,7 +124,11 @@ export function TrackPicker({ next, color, onClose }: { next: boolean; color: st
               </li>
             );
           })}
-          {shown.length === 0 && <li className="px-3 py-10 text-center text-muted">No matching tracks.</li>}
+          {shown.length === 0 && (
+            <li className="px-3 py-10 text-center text-muted">
+              {layer ? "No songs match the playing one's tempo and key." : "No matching tracks."}
+            </li>
+          )}
         </ul>
       </div>
     </div>
