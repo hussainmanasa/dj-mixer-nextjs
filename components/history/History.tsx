@@ -17,6 +17,7 @@ const HOW_LABEL: Record<SetLogEntry["how"], string> = {
   drop: "Drop swap",
   dialogue: "Dialogue → drop",
   rewind: "Rewind",
+  layer: "Layer",
 };
 
 function duration(sec: number): string {

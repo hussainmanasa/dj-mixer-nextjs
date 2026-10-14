@@ -130,3 +130,12 @@ export function firstStart(track: Track, choice: EntryChoice = { kind: "auto" },
   }
 }
 
+/**
+ * Where a layered song comes in (Layer): its hook — the part worth hearing
+ * over another song — else its drop. A Start from of beginning, drop or a bar
+ * is honoured; a dialogue isn't played under another song.
+ */
+export function layerEntry(track: Track, choice: EntryChoice = { kind: "auto" }): number {
+  if (choice.kind === "beginning" || choice.kind === "drop" || choice.kind === "bar") return resolveEntry(track, choice).land;
+  return hookOf(track.cues)?.start ?? dropCue(track.analysis!);
+}

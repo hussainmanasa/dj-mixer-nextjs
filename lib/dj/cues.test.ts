@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Track } from "@/lib/types";
 import { getMood } from "./moods";
-import { defaultStart, entryOptions, firstStart, openerWindow, resolveEntry, snapToBar, validateCues } from "./cues";
-import { pickOpener } from "./selector";
+import { defaultStart, entryOptions, firstStart, layerEntry, openerWindow, resolveEntry, snapToBar, validateCues } from "./cues";
+import { canLayer, pickOpener } from "./selector";
 
 // 120 BPM → 2 s bars from 0.5 s; drops at bars 64 (and 112).
 const levels = [...Array(48).fill(1), ...Array(16).fill(0.1), ...Array(32).fill(1), ...Array(16).fill(0.1), ...Array(32).fill(1), ...Array(16).fill(0.2)];
@@ -100,5 +100,30 @@ describe("firstStart (a deck loaded before Play)", () => {
     expect(firstStart(marked, { kind: "hook" })).toEqual({ start: 20.5 });
     expect(firstStart(marked, { kind: "drop" })).toEqual({ start: 128.5 });
     expect(firstStart(marked, { kind: "bar", bar: 4 })).toEqual({ start: 8.5 });
+  });
+});
+
+describe("layering", () => {
+  const withKey = (id: string, camelot: string | null, bpm = 120, extra: Partial<Track> = {}) => track(id, { camelot, ...extra }, bpm);
+
+  it("needs matching tempo and matching, known keys", () => {
+    const cur = withKey("cur", "8A");
+    expect(canLayer(cur, withKey("same", "8A"), 120)).toBe(true);
+    expect(canLayer(cur, withKey("adjacent", "9A"), 120)).toBe(true);
+    expect(canLayer(cur, withKey("relative", "8B"), 120)).toBe(true);
+    expect(canLayer(cur, withKey("two away", "10A"), 120)).toBe(false);
+    expect(canLayer(cur, withKey("unknown", null), 120)).toBe(false);
+    expect(canLayer(cur, withKey("too fast", "8A", 140), 120)).toBe(false);
+    expect(canLayer(cur, withKey("half", "8A", 60), 120, true)).toBe(true);
+    expect(canLayer(cur, cur, 120)).toBe(false);
+  });
+
+  it("comes in on the hook, else the drop, unless staff chose a start", () => {
+    const hooked = track("h", { cues: { hookStart: 20.5, hookEnd: 52.5, dialogueStart: 1, dialogueEnd: 5 } });
+    expect(layerEntry(hooked)).toBe(20.5);
+    expect(layerEntry(hooked, { kind: "dialogue" })).toBe(20.5);
+    expect(layerEntry(track("plain"))).toBe(128.5);
+    expect(layerEntry(hooked, { kind: "drop" })).toBe(128.5);
+    expect(layerEntry(hooked, { kind: "bar", bar: 4 })).toBe(8.5);
   });
 });

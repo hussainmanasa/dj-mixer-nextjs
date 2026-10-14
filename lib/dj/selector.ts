@@ -173,6 +173,8 @@ export interface RequestOption {
   recent: boolean;
   /** Close enough in tempo to beat-match from the playing track. */
   syncable: boolean;
+  /** Can be layered over the playing track (tempo and key match). */
+  layerable: boolean;
 }
 
 /**
@@ -190,8 +192,26 @@ export function rankForRequest(tracks: Track[], ctx: SelectionContext): RequestO
       moodFit: moodFit(track, ctx.mood),
       recent: recent.has(track.id),
       syncable: ctx.currentBpm === null || syncRatio(ctx.currentBpm, track.analysis!.bpm, ctx.mood.halfTime) !== null,
+      layerable: !!ctx.current && ctx.currentBpm !== null && canLayer(ctx.current, track, ctx.currentBpm, ctx.mood.halfTime),
     }))
     .sort((x, y) => Number(x.recent) - Number(y.recent) || y.score - x.score);
+}
+
+/** Keys close enough to layer two whole songs: the same, ±1 on the Camelot wheel, or relative major/minor. */
+export const LAYER_MIN_KEY = 0.8;
+
+/**
+ * Whether `next` can be layered over `current` (Layer): both beat grids
+ * reliable, the tempos beat-matchable (×2 / ×½ in half-time moods), and both
+ * keys known and matching. Two whole songs at once in clashing keys sound wrong.
+ */
+export function canLayer(current: Track, next: Track, currentBpm: number, halfTime = false): boolean {
+  const a = current.analysis;
+  const b = next.analysis;
+  if (!a || !b || next.id === current.id) return false;
+  if (a.beatConfidence < MIN_BLEND_CONFIDENCE || b.beatConfidence < MIN_BLEND_CONFIDENCE) return false;
+  if (syncRatio(currentBpm, b.bpm, halfTime) === null) return false;
+  return keyCompatibility(current.camelot, next.camelot) >= LAYER_MIN_KEY;
 }
 
 /**

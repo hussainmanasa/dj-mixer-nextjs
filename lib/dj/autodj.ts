@@ -12,13 +12,26 @@ import { AudioEngine } from "@/lib/audio/engine";
 import type { Deck } from "@/lib/audio/deck";
 import type { FxKind } from "@/lib/audio/fx";
 import { libraryLoudness } from "@/lib/analysis/loudness";
-import { blend, cut, dialogueIn, dropIn, echoOut, filterSweep, REWIND_LEAD, rewindInto, type TransitionPlan } from "@/lib/audio/transitions";
+import {
+  blend,
+  cut,
+  dialogueIn,
+  dropIn,
+  echoOut,
+  filterSweep,
+  layerIn,
+  layerSwap,
+  REWIND_LEAD,
+  rewindInto,
+  type TransitionPlan,
+} from "@/lib/audio/transitions";
 import type { EntryChoice, Mood, MoodId, Track, TransitionKind } from "@/lib/types";
-import { defaultStart, firstStart, openerWindow, resolveEntry, type FirstStart } from "./cues";
+import { defaultStart, firstStart, layerEntry, openerWindow, resolveEntry, type FirstStart } from "./cues";
 import { getMood, targetEnergy } from "./moods";
 import { drops } from "@/lib/analysis/structure";
 import { barSeconds, BEATS_PER_BAR, dropBuildBars, mixOutPoint, nextBoundary, nextDownbeat } from "./mixpoints";
 import {
+  canLayer,
   chooseTransition,
   isMoodJump,
   MIN_BLEND_CONFIDENCE,
@@ -67,6 +80,8 @@ export interface UpNext {
   startAt: number;
   /** Desi Night: this mix only happens on Drop (or by itself near the end of the song). */
   holding: boolean;
+  /** It can be layered over the playing song now (tempo and key match). */
+  layerable: boolean;
 }
 
 export interface Standby {
@@ -127,6 +142,8 @@ export interface BoothSnapshot {
   dropLocked: boolean;
   /** Effects sounding right now, and whether the auto-DJ fired them. */
   activeFx: { kind: FxKind; auto: boolean }[];
+  /** Two songs are layered and waiting for Drop to swap them. */
+  layering: boolean;
 }
 
 export interface AutoDJDeps {
@@ -153,6 +170,8 @@ interface Planned {
   holding: boolean;
   /** The auto-DJ scheduled effects for this transition (cancelled if it's re-planned). */
   fx: boolean;
+  /** A layer (staff pressed Layer): it plays over the current song until Drop swaps them. */
+  layer?: { rate: number };
 }
 
 interface Loaded {
@@ -339,6 +358,8 @@ export class AutoDJ {
    */
   drop(): boolean {
     if (!this.playing || !this.current || this.recovering) return false;
+    // Two songs layered: Drop swaps them.
+    if (this.planned?.layer) return this.finishLayer();
     // The live song is still in its dialogue: let it reach its drop first.
     if (this.current.deck.pendingJump() !== null) return false;
     const p = this.planned;
@@ -349,6 +370,47 @@ export class AutoDJ {
     if (up) this.schedule(up.track, up.buffer, up.requested, up.entry);
     // Still choosing / decoding: schedule() picks the request up.
     else void this.planNext();
+    return true;
+  }
+
+  /**
+   * Staff pressed Layer: from the next phrase, `track` (default: the cued
+   * song) plays over the current one, beat-matched, its bass off, until Drop
+   * swaps them (or, if nobody does, before either song runs out). Only songs
+   * that match in tempo and key (`canLayer`); false otherwise, or while a mix
+   * or a dialogue is under way.
+   */
+  layer(track?: Track): boolean {
+    const cur = this.current;
+    if (!this.playing || !cur || this.recovering || this.planning || cur.deck.pendingJump() !== null) return false;
+    const p = this.planned;
+    if (p && (p.layer || p.plan.start <= this.engine.now + SCHEDULE_MARGIN)) return false;
+    const target = track ?? p?.track;
+    const curBpm = this.currentBpm();
+    if (!target || curBpm === null || !canLayer(cur.track, target, curBpm, this.mood.halfTime)) return false;
+    const up = this.unplan();
+    if (up && up.track.id === target.id) {
+      this.scheduleLayer(up.track, up.buffer, up.requested, up.entry);
+      return true;
+    }
+    // A different song: the cued one goes back to the queue if staff asked for it.
+    if (up?.requested) {
+      this.requests.unshift(up.track);
+      this.requestEntries.set(up.track.id, up.entry);
+    }
+    this.requests = this.requests.filter((t) => t.id !== target.id);
+    const gen = this.generation;
+    this.planning = true;
+    void this.decodeTrack(target)
+      .then((buffer) => {
+        if (gen !== this.generation || !this.playing || this.planned) return;
+        if (buffer) this.scheduleLayer(target, buffer, true, { kind: "auto" });
+        else void this.planNext();
+      })
+      .finally(() => {
+        this.planning = false;
+        if (!this.planned) void this.planNext();
+      });
     return true;
   }
 
@@ -727,6 +789,63 @@ export class AutoDJ {
     this.fxWindows = [...this.fxWindows.filter((w) => w.end > now), { kind, start, end, auto }];
   }
 
+  /** Start a layer on the next 4-bar phrase; arm the safety swap before either song runs out. */
+  private scheduleLayer(track: Track, buffer: AudioBuffer, requested: boolean, entry: EntryChoice): void {
+    const cur = this.current!;
+    const a = cur.track.analysis!;
+    const b = track.analysis!;
+    const tl = cur.deck.timeline!;
+    const now = this.engine.now;
+    const earliest = tl.positionAt(now + SCHEDULE_MARGIN);
+    const t = tl.timeAt(nextBoundary(a, earliest, DROP_BOUNDARY_BARS));
+    const outBpm = a.bpm * tl.rateAt(t);
+    const outBeat = 60 / outBpm;
+    const rate = outBpm / (b.bpm * (syncRatio(outBpm, b.bpm, this.mood.halfTime) ?? 1));
+    const startAt = layerEntry(track, entry);
+
+    const inc = this.engine.freeDeck([cur.deck, ...(this.standby ? [this.standby.deck] : [])]);
+    if (!inc) return;
+    inc.load(track, buffer, this.loudnessTarget());
+    const plan = layerIn(cur.deck, inc, t, outBeat);
+    inc.start(t, startAt, rate);
+
+    // Safety: swap by itself well before the current song's outro or the layered song's end.
+    const outroAt = tl.timeAt(mixOutPoint(a, 8, earliest));
+    const layeredEnds = t + (b.duration - startAt) / rate - 32 * outBeat;
+    const safety = Math.min(outroAt, layeredEnds);
+    const timer = setTimeout(() => this.finishLayer(), Math.max(0, (safety - SCHEDULE_MARGIN - 1 - this.engine.now) * 1000));
+    this.planned = { deck: inc, track, plan, timer, requested, staffDrop: false, entry, startAt, holding: false, fx: false, layer: { rate } };
+    this.note = `Layering ${track.title} — press Drop to swap`;
+    this.emit();
+  }
+
+  /** End a layer: swap the basslines on the next 4-bar phrase and let the old song fade. */
+  private finishLayer(): boolean {
+    const p = this.planned;
+    const cur = this.current;
+    if (!p?.layer || p.plan.drop !== undefined || !cur?.deck.timeline || !this.playing) return false;
+    const a = cur.track.analysis!;
+    const tl = cur.deck.timeline;
+    const now = this.engine.now;
+    // Not before the layer has actually started.
+    const from = Math.max(now + SCHEDULE_MARGIN, p.plan.start + 0.1);
+    const t = tl.timeAt(nextBoundary(a, tl.positionAt(from), DROP_BOUNDARY_BARS));
+    const outBeat = 60 / (a.bpm * tl.rateAt(t));
+    clearTimeout(p.timer);
+    p.plan = layerSwap(cur.deck, p.deck, p.plan.start, t, outBeat);
+    if (Math.abs(p.layer.rate - 1) > 0.001) {
+      p.deck.rampRate(p.plan.end, p.plan.end + TEMPO_HANDBACK_BARS * 4 * outBeat, 1);
+    }
+    if (this.mood.autoFx) {
+      const delay = this.engine.outputDelay;
+      this.noteFx("reverb", t - outBeat + delay, this.engine.fx.trigger("reverb", t - outBeat + delay, outBeat), true);
+    }
+    p.timer = setTimeout(() => this.handover(), Math.max(0, (p.plan.end - this.engine.now) * 1000) + 60);
+    this.note = null;
+    this.emit();
+    return true;
+  }
+
   private handover(): void {
     const p = this.planned;
     const prev = this.current;
@@ -903,6 +1022,7 @@ export class AutoDJ {
       mix: p ? { start: p.plan.start, end: p.plan.end, drop: p.plan.drop } : null,
       mixOutPosition: p && liveTl ? liveTl.positionAt(p.plan.start) : null,
       dropLocked: this.current?.deck.pendingJump(this.engine.now) != null,
+      layering: !!p?.layer && p.plan.drop === undefined && this.engine.now >= p.plan.start,
       activeFx: this.fxWindows
         .filter((w) => w.start <= this.engine.now && this.engine.now < w.end)
         .map(({ kind, auto }) => ({ kind, auto })),
@@ -933,6 +1053,11 @@ export class AutoDJ {
             entry: p.entry,
             startAt: p.startAt,
             holding: p.holding,
+            layerable:
+              !p.layer &&
+              !!c &&
+              this.currentBpm() !== null &&
+              canLayer(c.track, p.track, this.currentBpm()!, this.mood.halfTime),
           }
         : null,
       queue: [...this.requests],

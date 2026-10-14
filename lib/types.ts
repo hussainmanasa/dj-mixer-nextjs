@@ -137,8 +137,9 @@ export interface Track {
  * `drop`: the next track comes in on its drop (staff Drop, drop swaps).
  * `dialogue`: the next track's dialogue plays, then it jumps straight to its drop.
  * `rewind`: the outgoing track spins back, then the next one hits (big tempo jumps).
+ * `layer`: both songs play together (Layer) until Drop swaps them.
  */
-export type TransitionKind = "blend" | "filterSweep" | "echoOut" | "cut" | "drop" | "dialogue" | "rewind";
+export type TransitionKind = "blend" | "filterSweep" | "echoOut" | "cut" | "drop" | "dialogue" | "rewind" | "layer";
 
 /** Song markers, in track seconds. Set by the admin in the track editor; they survive re-analysis. */
 export interface TrackCues {

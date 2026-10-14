@@ -23,8 +23,9 @@ Full product plan: https://claude.ai/code/artifact/903692c7-9f12-49a9-9de1-5a82b
 2. **Staff steer, the auto-DJ mixes.** Owner decisions of 13 Oct 2026 allow exactly these booth actions:
    mood picker, Play/Stop, **Drop** (bring the next track in on its drop), **effects** (Echo, Filter, Reverb,
    Riser on the master FX chain), **track requests** (choose the cued deck's track, or queue tracks), from
-   14 Oct 2026 **Start from** on the cued deck (Auto / Beginning / Dialogue / Hook / Drop, or tap a bar), and
-   **loading songs into decks before Play** (each with its Start from; the auto-DJ takes over after them).
+   14 Oct 2026 **Start from** on the cued deck (Auto / Beginning / Dialogue / Hook / Drop, or tap a bar),
+   **loading songs into decks before Play** (each with its Start from; the auto-DJ takes over after them), and
+   **Layer** (two songs together until Drop swaps them; only songs that match in tempo and key).
    Every action goes through `AutoDJ`: it still beat-matches, chooses the transition, times it on the grid
    and steers back to the mood. Do not add manual decks, crossfader, per-deck EQ/faders, jog control,
    skip/seek, energy slider or tempo controls, and never let UI write to deck automation directly.
@@ -236,6 +237,15 @@ low-pass over the last bar and snapping open on the drop, a reverb wash on cuts;
 clean. Re-planning a transition cancels them (`MasterFx.cancelScheduled`, eases each effect back to rest).
 `snapshot().activeFx` (from `fxWindows`) lights the FX pad, with "· auto" for the auto-DJ's own.
 
+Layer: `AutoDJ.layer(track?)` — only if `canLayer` (both grids reliable, tempos beat-matchable incl. half-time,
+both keys known and ≥ `LAYER_MIN_KEY`: same, ±1 or relative). From the next 4-bar phrase `layerIn` brings the
+song in beat-matched with its bass killed, rising to 85%, while the current song's mids dip 4 dB; the plan has
+no end (`Planned.layer`). Drop calls `finishLayer`: `layerSwap` swaps the basslines on the next 4-bar phrase and
+fades the old song over 2 bars under a rising high-pass, then the usual hand-over. A safety timer swaps by itself
+before the current song's outro or 8 bars before the layered song ends, so the music never stops. The layered
+song comes in on its hook (else its drop) unless staff chose beginning / drop / a bar (`layerEntry`). The booth's
+Layer button layers the cued song if it matches, else opens the picker filtered to matching songs.
+
 Start from: `AutoDJ.setEntry(choice)` re-plans the cued transition (like Drop and requests: only before it is
 under way) and the cued deck's overview shows a ⚑ where it will start.
 
@@ -314,7 +324,10 @@ device, and starts `next start -p 3100` (build first). Audio runs for real; noth
   effect staff fired by hand moments before.
 - Decks loaded before Play live in memory only (lost on reload).
 - The editor preview doesn't apply key-lock or volume matching, so it can sound slightly different from the booth.
-- The 4th deck is allocated but layered (overlapping) blends are not implemented yet.
+- Layer uses two decks (the playing and the cued). Layering a third song, or an a-cappella crate over the running
+  mix on decks C/D, isn't built; nor is vocal separation (needs an ML model).
+- Layering clashing keys is refused rather than pitch-shifted (owner decision); songs without a known key
+  can't be layered.
 - No server side (by owner decision for now): no accounts, sync, multi-venue, backup, remote control,
   crowd input or MIDI controllers.
 - Dev tooling has known `npm audit` advisories (vitest 3, eslint-config-next); none ship in the app.

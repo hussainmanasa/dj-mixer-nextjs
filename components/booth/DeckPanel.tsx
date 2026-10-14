@@ -71,8 +71,8 @@ export function DeckPanel({
     const view = snap?.decks[deck] ?? null;
     let label = ROLE_LABEL[role];
     if (snap?.mix && snap.now >= snap.mix.start) {
-      if (role === "incoming") label = "Mixing in";
-      if (role === "live") label = "Mixing out";
+      if (role === "incoming") label = snap.layering ? "Layered" : "Mixing in";
+      if (role === "live" && !snap.layering) label = "Mixing out";
     }
     setText(badge.current, label);
     // Once this deck's mix is (about to be) under way, its track can't change.

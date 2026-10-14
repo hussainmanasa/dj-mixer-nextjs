@@ -31,6 +31,8 @@ interface SessionState {
   drop: () => void;
   /** Booth "Start from": where the cued song comes in. */
   setEntry: (choice: EntryChoice) => void;
+  /** Layer: the cued song (or `trackId`) plays over the current one until Drop swaps them. */
+  layer: (trackId?: string) => void;
   /** Songs loaded into decks before Play (index = deck). Deck A plays first, the others next in order. */
   preloads: (Preload | null)[];
   loadDeck: (deck: number, trackId: string) => void;
@@ -185,6 +187,11 @@ export const useSession = create<SessionState>((set, get) => ({
 
   setEntry(choice) {
     dj?.setEntry(choice);
+  },
+
+  layer(trackId) {
+    const track = trackId ? useLibrary.getState().tracks[trackId] : undefined;
+    dj?.layer(track);
   },
 
   loadDeck(deck, trackId) {

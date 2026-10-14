@@ -27,6 +27,8 @@ Open http://localhost:3000, then:
    Riser) fire on the next beat; **Change track** / **Add track** request music. The auto-DJ still
    beat-matches and mixes every request for the mood, and in moods with *Add effects on transitions* it fires
    effects itself as the music changes (the FX pad lights up, marked "auto").
+   **Layer** plays the next song over the current one (its bass off) until you press **Drop**, which swaps
+   them — only for songs that match in tempo and key.
 
 ## Running at a venue
 
