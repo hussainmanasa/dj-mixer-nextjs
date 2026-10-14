@@ -150,6 +150,30 @@ export function dropIn(out: Deck, inc: Deck, start: number, t: number, outBeatSe
   return { kind: "drop", start, end: build ? fadeEnd : t + 4 * outBeatSec, drop: t };
 }
 
+/**
+ * Dialogue → drop (Desi Night, or a Drop onto a song with a marked dialogue):
+ * the outgoing track's last beat goes into the echo and it cuts out at `t`,
+ * when the incoming deck starts its dialogue — clear, at full level, with the
+ * echo tail fading underneath. The incoming deck itself jumps from the end of
+ * the dialogue to its drop (`Deck.start` with a jump at `drop`).
+ */
+export function dialogueIn(out: Deck, inc: Deck, t: number, drop: number, outBeatSec: number): TransitionPlan {
+  out.echoDelay.delayTime.setValueAtTime(Math.min(4, outBeatSec * 0.75), t - outBeatSec);
+  out.echoSend.gain.setValueAtTime(0, t - outBeatSec);
+  // Quieter than an echo-out's throw, so the tail sits under the words.
+  out.echoSend.gain.linearRampToValueAtTime(0.4, t - 0.01);
+  out.echoSend.gain.linearRampToValueAtTime(0, t + 0.02);
+  out.fader.gain.setValueAtTime(1, t - 0.01);
+  out.fader.gain.linearRampToValueAtTime(0, t + 0.02);
+
+  inc.resetControls(0);
+  inc.fader.gain.setValueAtTime(0, t - 0.01);
+  inc.fader.gain.linearRampToValueAtTime(1, t + 0.02);
+
+  // Hand over once the outgoing deck is out (the incoming deck jumps by itself).
+  return { kind: "dialogue", start: t, end: t + 4 * outBeatSec, drop };
+}
+
 /** Hard cut on a downbeat — the fallback when a beat grid can't be trusted. */
 export function cut(out: Deck, inc: Deck, t: number): TransitionPlan {
   out.fader.gain.setValueAtTime(1, t - 0.01);

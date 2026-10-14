@@ -2,15 +2,31 @@
 
 import { useMemo, useRef } from "react";
 import { drops } from "@/lib/analysis/structure";
+import { dialogueOf, hookOf } from "@/lib/dj/cues";
 import type { Track } from "@/lib/types";
 import { useBoothFrame } from "./frame";
 
 /**
  * Whole-track overview: one bar per musical bar, height = bass level, drops in
- * the mood colour. Shows the playhead and, on the live deck, where the next
- * mix starts.
+ * the mood colour, marked dialogue (amber) and hook (green) along the top.
+ * Shows the playhead, on the live deck where the next mix starts, and on the
+ * cued deck where it will start (`startAt`; tap a bar to change it).
  */
-export function TrackOverview({ deck, track, color, live }: { deck: number; track: Track | null; color: string; live: boolean }) {
+export function TrackOverview({
+  deck,
+  track,
+  color,
+  live,
+  startAt,
+  onPickBar,
+}: {
+  deck: number;
+  track: Track | null;
+  color: string;
+  live: boolean;
+  startAt?: number;
+  onPickBar?: (bar: number) => void;
+}) {
   const a = track?.analysis ?? null;
   const playhead = useRef<HTMLDivElement>(null);
   const played = useRef<HTMLDivElement>(null);
@@ -29,6 +45,22 @@ export function TrackOverview({ deck, track, color, live }: { deck: number; trac
     }));
   }, [a]);
 
+  const marks = useMemo(() => {
+    if (!a || !track) return [];
+    const pct = (t: number) => Math.max(0, Math.min(100, (t / a.duration) * 100));
+    return [
+      { label: "Dialogue", range: dialogueOf(track.cues), color: "var(--warn)" },
+      { label: "Hook", range: hookOf(track.cues), color: "var(--good)" },
+    ].flatMap((m) => (m.range ? [{ ...m, left: pct(m.range.start), width: pct(m.range.end) - pct(m.range.start) }] : []));
+  }, [a, track]);
+
+  const pick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!onPickBar || !a) return;
+    const box = e.currentTarget.getBoundingClientRect();
+    const time = ((e.clientX - box.left) / box.width) * a.duration;
+    onPickBar(Math.max(0, Math.round((time - a.firstBeat) / ((60 / a.bpm) * 4))));
+  };
+
   useBoothFrame((snap) => {
     const view = snap?.decks[deck] ?? null;
     const pct = a && view ? Math.min(100, (view.position / a.duration) * 100) : 0;
@@ -42,7 +74,12 @@ export function TrackOverview({ deck, track, color, live }: { deck: number; trac
   });
 
   return (
-    <div className="relative h-12 overflow-hidden rounded-lg bg-black/40" aria-hidden>
+    <div
+      className={`relative h-12 overflow-hidden rounded-lg bg-black/40 ${onPickBar ? "cursor-pointer" : ""}`}
+      aria-hidden
+      onClick={pick}
+      title={onPickBar ? "Tap a bar to start the song there" : undefined}
+    >
       {bars.length > 0 ? (
         <svg viewBox="0 0 1000 40" preserveAspectRatio="none" className="absolute inset-0 h-full w-full">
           {bars.map((b, i) => (
@@ -56,6 +93,16 @@ export function TrackOverview({ deck, track, color, live }: { deck: number; trac
       <div ref={marker} className="absolute inset-y-0 w-0.5 -translate-x-1/2 bg-white" style={{ display: "none" }}>
         <span className="absolute -top-0.5 left-1/2 -translate-x-1/2 text-[10px] leading-none text-white">▼</span>
       </div>
+      {marks.map((m) => (
+        <div key={m.label} className="absolute top-0 h-1.5 rounded-b-sm" style={{ left: `${m.left}%`, width: `${Math.max(0.5, m.width)}%`, background: m.color }} />
+      ))}
+      {startAt !== undefined && a && (
+        <div className="absolute inset-y-0 w-0.5 -translate-x-1/2" style={{ left: `${(startAt / a.duration) * 100}%`, background: color }}>
+          <span className="absolute -top-0.5 left-0.5 text-[10px] leading-none" style={{ color }}>
+            ⚑
+          </span>
+        </div>
+      )}
       <div ref={playhead} className="absolute inset-y-0 w-0.5 -translate-x-1/2 bg-white shadow-[0_0_6px_white]" style={{ left: 0 }} />
     </div>
   );

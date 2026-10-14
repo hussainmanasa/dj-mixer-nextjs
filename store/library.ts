@@ -19,7 +19,7 @@ import {
   type Settings,
 } from "@/lib/library/store";
 import { getMood, resolveMoods } from "@/lib/dj/moods";
-import { MAX_DECKS, MIN_DECKS, type Mood, type MoodId, type Track, type TrackAnalysis, type TrackFlag, type TrackOverrides } from "@/lib/types";
+import { MAX_DECKS, MIN_DECKS, type Mood, type MoodId, type Track, type TrackAnalysis, type TrackCues, type TrackFlag, type TrackOverrides } from "@/lib/types";
 
 export type FolderState = "none" | "needs-permission" | "ready";
 
@@ -49,6 +49,8 @@ interface LibraryState {
   markError: (id: string, message: string) => void;
   setFlag: (id: string, flag: TrackFlag | undefined) => Promise<void>;
   setCrates: (id: string, crates: string[]) => Promise<void>;
+  /** Save song markers; `null` clears one. */
+  setCues: (id: string, cues: { [K in keyof TrackCues]?: number | null }) => Promise<void>;
   /**
    * Admin fixes. A new beat grid re-analyses the track on it (resolves when
    * done); drop sensitivity and key apply at once. `null` clears an override.
@@ -236,6 +238,17 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   async setCrates(id, crates) {
     const clean = [...new Set(crates.map((c) => c.trim()).filter(Boolean))].sort();
     await patchTrack(id, (t) => ({ ...t, crates: clean.length ? clean : undefined }));
+  },
+
+  async setCues(id, changes) {
+    await patchTrack(id, (t) => {
+      const cues: TrackCues = { ...t.cues };
+      for (const [k, v] of Object.entries(changes) as [keyof TrackCues, number | null | undefined][]) {
+        if (v === null || v === undefined) delete cues[k];
+        else cues[k] = Math.round(v * 1000) / 1000;
+      }
+      return { ...t, cues: Object.keys(cues).length ? cues : undefined };
+    });
   },
 
   async setOverrides(id, changes) {

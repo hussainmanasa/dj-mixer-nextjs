@@ -175,6 +175,25 @@ export function rankForRequest(tracks: Track[], ctx: SelectionContext): RequestO
     .sort((x, y) => Number(x.recent) - Number(y.recent) || y.score - x.score);
 }
 
+/**
+ * The set opener for a mood with `opener`: a slow song from the opener crates
+ * (at most `maxBpm`), preferring songs with a hook marker. Falls back to any
+ * song in those crates, then to the slowest songs in the library. `random`
+ * picks among equally good candidates so sets don't always open the same way.
+ */
+export function pickOpener(tracks: Track[], mood: Mood, random: () => number = Math.random): Track | null {
+  const o = mood.opener;
+  if (!o) return null;
+  const pool = tracks.filter(playable);
+  const inCrates = pool.filter((t) => t.crates?.some((c) => o.crates.includes(c)));
+  const slow = (list: Track[]) => list.filter((t) => t.analysis!.bpm <= o.maxBpm);
+  const slowest = [...pool].sort((x, y) => x.analysis!.bpm - y.analysis!.bpm).slice(0, 5);
+  const candidates = [slow(inCrates), inCrates, slow(pool), slowest].find((l) => l.length > 0) ?? [];
+  const withHook = candidates.filter((t) => t.cues?.hookStart !== undefined && t.cues.hookEnd !== undefined);
+  const best = withHook.length > 0 ? withHook : candidates;
+  return best.length ? best[Math.floor(random() * best.length) % best.length] : null;
+}
+
 /** Pick the transition recipe between the playing track and the incoming one. */
 export function chooseTransition(
   current: Track,

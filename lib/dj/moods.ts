@@ -68,6 +68,23 @@ export const MOODS: Mood[] = [
     maxPlayBars: 160,
     dropSwap: false,
   },
+  {
+    id: "desi",
+    name: "Desi Night",
+    description: "Bollywood & Punjabi: a slow opener's hook, then drop after drop",
+    bpm: [90, 135],
+    energy: [0.5, 1],
+    genres: ["bollywood", "punjabi", "bhangra", "desi", "hindi", "filmi", "indian"],
+    blendBars: 16,
+    crates: ["Bollywood party", "Punjabi"],
+    mixOutAfterDrops: 1,
+    maxPlayBars: 128,
+    dropSwap: true,
+    // Opens with a romantic hook, auto-drops into the party, then each song
+    // plays until staff press Drop (it still mixes out near its end).
+    opener: { crates: ["Romantic"], maxBpm: 105 },
+    holdForDrop: true,
+  },
 ];
 
 export const DEFAULT_MOOD: MoodId = "warmup";
@@ -99,6 +116,7 @@ export function validateMood(m: Mood): string[] {
   if (!(m.maxPlayBars >= 32 && m.maxPlayBars <= 512 && m.maxPlayBars % 8 === 0))
     errors.push("Longest play must be 32–512 bars, in steps of 8.");
   if (!m.name.trim()) errors.push("Give the mood a name.");
+  if (m.opener && !(m.opener.maxBpm >= 60 && m.opener.maxBpm <= 200)) errors.push("The opener's top BPM must be within 60–200.");
   return errors;
 }
 

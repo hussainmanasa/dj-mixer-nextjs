@@ -10,7 +10,7 @@ import { AutoDJ, type AutoDJStatus, type BoothSnapshot } from "@/lib/dj/autodj";
 import { DEFAULT_MOOD, resolveMood, targetEnergy } from "@/lib/dj/moods";
 import { rankForRequest, type RequestOption } from "@/lib/dj/selector";
 import { appendSetLog, loadLastSession, saveLastSession } from "@/lib/library/store";
-import type { MoodId, Track } from "@/lib/types";
+import type { EntryChoice, MoodId, Track } from "@/lib/types";
 import { readyTracks, useLibrary } from "./library";
 
 interface SessionState {
@@ -29,6 +29,8 @@ interface SessionState {
   setMood: (mood: MoodId) => void;
   /** Bring the next track in on its drop at the next 4-bar boundary. */
   drop: () => void;
+  /** Booth "Start from": where the cued song comes in. */
+  setEntry: (choice: EntryChoice) => void;
   /** Fire an effect on the whole mix, on the next beat. */
   fx: (kind: FxKind) => void;
   /** Staff request: `next` replaces the cued track, otherwise it joins the queue. */
@@ -168,6 +170,10 @@ export const useSession = create<SessionState>((set, get) => ({
 
   fx(kind) {
     dj?.fx(kind);
+  },
+
+  setEntry(choice) {
+    dj?.setEntry(choice);
   },
 
   request(trackId, next) {

@@ -22,4 +22,23 @@ describe("PlaybackTimeline", () => {
     }
     expect(tl.rateAt(45)).toBeCloseTo(1.03, 9);
   });
+
+  it("jumps from a dialogue straight to the drop", () => {
+    // Dialogue from 1.2 s plays for 5 s, then the track continues from its drop at 128.5 s.
+    const tl = new PlaybackTimeline(100, 1.2, 1, null, { at: 105, to: 128.5 });
+    expect(tl.positionAt(104)).toBeCloseTo(5.2, 9);
+    expect(tl.positionAt(105)).toBeCloseTo(128.5, 9);
+    expect(tl.positionAt(115)).toBeCloseTo(138.5, 9);
+    // Positions after the drop map to times after the jump; skipped ones to the jump itself.
+    expect(tl.timeAt(138.5)).toBeCloseTo(115, 9);
+    expect(tl.timeAt(3.2)).toBeCloseTo(102, 9);
+    expect(tl.timeAt(60)).toBeCloseTo(105, 9);
+  });
+
+  it("keeps a later tempo ramp in step after the jump", () => {
+    const tl = new PlaybackTimeline(0, 0, 1, { t0: 20, t1: 40, r0: 1, r1: 1.04 }, { at: 10, to: 50 });
+    expect(tl.positionAt(20)).toBeCloseTo(60, 9);
+    expect(tl.positionAt(40)).toBeCloseTo(60 + 20.4, 9);
+    for (const t of [12, 20, 33, 40, 55]) expect(tl.timeAt(tl.positionAt(t))).toBeCloseTo(t, 6);
+  });
 });

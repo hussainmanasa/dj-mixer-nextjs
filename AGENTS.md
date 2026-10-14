@@ -22,7 +22,8 @@ Full product plan: https://claude.ai/code/artifact/903692c7-9f12-49a9-9de1-5a82b
    content and playing it from a business.
 2. **Staff steer, the auto-DJ mixes.** Owner decisions of 13 Oct 2026 allow exactly these booth actions:
    mood picker, Play/Stop, **Drop** (bring the next track in on its drop), **effects** (Echo, Filter, Reverb,
-   Riser on the master FX chain) and **track requests** (choose the cued deck's track, or queue tracks).
+   Riser on the master FX chain), **track requests** (choose the cued deck's track, or queue tracks) and, from
+   14 Oct 2026, **Start from** on the cued deck (Auto / Beginning / Dialogue / Hook / Drop, or tap a bar).
    Every action goes through `AutoDJ`: it still beat-matches, chooses the transition, times it on the grid
    and steers back to the mood. Do not add manual decks, crossfader, per-deck EQ/faders, jog control,
    skip/seek, energy slider or tempo controls, and never let UI write to deck automation directly.
@@ -67,12 +68,13 @@ lib/
     moods.ts                  PURE: mood presets + energy target curve
     selector.ts               PURE: score/rank tracks, choose transition type
     mixpoints.ts              PURE: structure-aware mix-out / cue-in points
+    cues.ts                   PURE: song markers (dialogue, hook, default start), entries, opener window
     autodj.ts                 client: the orchestrator (plans, schedules, recovers)
   audio/
-    timeline.ts               PURE: context time ↔ track position under rate ramps
+    timeline.ts               PURE: context time ↔ track position under rate ramps and one jump
     deck.ts                   client: source → trim → 3-band EQ → filter → fader → out [→ key-lock]
     engine.ts                 client: N decks → master → effects → limiter → analysers (meter, watchdog) → out
-    transitions.ts            client: blend, filterSweep, echoOut, cut, dropIn automation
+    transitions.ts            client: blend, filterSweep, echoOut, cut, dropIn, dialogueIn automation
     fx.ts                     client: staff effects on the master (echo, filter, reverb, noise riser)
     keylock.ts                client: loads public/worklets/keylock.js (phase-vocoder pitch corrector)
   library/
@@ -181,6 +183,29 @@ Moods: `/moods` edits presets; only differences are stored (`settings.moods`). `
 `deps.resolveMood` at every decision, so edits apply from the next transition mid-set. `validateMood` guards
 the editor.
 
+Song markers: `Track.cues` (set in the track editor's *Song markers* section, with a live preview, Mark now
+and nudges; hook and default start snap to the grid, dialogue is exact) — dialogue start/end, hook start/end,
+default start. They survive re-analysis. `cues.ts` turns a track + a "Start from" choice into an `Entry`:
+the position that lands (`land`: its drop, hook or a bar) and an optional dialogue to play first.
+
+Landing transitions (`AutoDJ.schedule`): staff Drop, the opener's auto-drop, Desi Night songs, drop swaps and
+a "Start from" of dialogue / hook / drop. With a dialogue, `dialogueIn` cuts the outgoing track (echo tail) as
+the dialogue starts and the incoming deck jumps from the dialogue's end to its drop —
+`Deck.start(when, offset, rate, jump)` schedules two sources with a 10 ms crossfade and `PlaybackTimeline.jump`
+keeps position ↔ time right across it (plays at its own tempo, rate 1). Without one it is the drop swap.
+Drop is refused while the live deck is still in its dialogue (`Deck.pendingJump`, `dropLocked`).
+
+Desi Night (`desi` mood): `opener` — only when a set *starts* in the mood, `pickOpener` takes a slow song
+(≤ `maxBpm`) from the opener crates (preferring ones with a hook), plays its hook (`openerWindow`; 32 bars from
+its start if unmarked) and auto-drops into the party when the hook ends (with a riser unless a dialogue
+follows). `holdForDrop` — after that, each song plays until staff press Drop; if nobody does, it mixes out by
+itself near its end (`mixOutPoint` without a mood rule), so the music never stops. Booth "Up next" says
+"waits for Drop". Defaults: opener crate "Romantic" ≤ 105 BPM, party crates "Bollywood party" and "Punjabi"
+(empty crates fall back to the whole library). All editable on the Moods page.
+
+Start from: `AutoDJ.setEntry(choice)` re-plans the cued transition (like Drop and requests: only before it is
+under way) and the cued deck's overview shows a ⚑ where it will start.
+
 Silence watchdog: uses `engine.peak()` — the loudest sample over a ~0.7 s analyser window. A short RMS window
 sampled every 500 ms can alias with the beat and land between sparse hits every time, reporting silence while
 the music plays (seen with synthetic kick-only tracks).
@@ -190,7 +215,7 @@ the music plays (seen with synthetic kick-only tracks).
 - **Schedule every sound on the AudioContext clock** (`start(when)`, `setValueAtTime`, ramps). Never trigger
   audio from `setTimeout`/`setInterval`; JS timers are only for planning and hand-over.
 - **Change playback rate only via `Deck.rampRate()`** so `PlaybackTimeline` stays in sync (it also drives the
-  key-lock pitch). Beat alignment depends on it.
+  key-lock pitch). Beat alignment depends on it. Likewise, jump inside a song only via `Deck.start(…, jump)`.
 - Anything timed against what the room hears (master effects, display) adds `engine.outputDelay`.
 - `BiquadFilterNode.type` can't be scheduled — switch it immediately at an inaudible cut-off, then schedule
   the frequency sweep (see `filterSweep`).
@@ -243,6 +268,10 @@ device, and starts `next start -p 3100` (build first). Audio runs for real; noth
 - Grid preview shares the club speakers, so it is disabled while the booth plays (no separate cue output).
 - Offline: in-app navigation waits for the network; a full reload of a visited page works.
 - The set log, settings and edits live in this browser's IndexedDB only (no server, no backup) — export CSVs.
+- Desi Night: hook and dialogue markers are set by hand for now (suggestions from the analysis are planned);
+  no half/double-tempo matching yet, so a 64 BPM song is treated as far from a 128 BPM one; no rewind/spinback.
+  The opener only happens when a set starts in Desi Night, not on a mid-set switch (by design).
+- The editor preview doesn't apply key-lock or volume matching, so it can sound slightly different from the booth.
 - The 4th deck is allocated but layered (overlapping) blends are not implemented yet.
 - No server side (by owner decision for now): no accounts, sync, multi-venue, backup, remote control,
   crowd input or MIDI controllers.

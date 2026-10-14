@@ -12,17 +12,19 @@ import { AudioEngine } from "@/lib/audio/engine";
 import type { Deck } from "@/lib/audio/deck";
 import type { FxKind } from "@/lib/audio/fx";
 import { libraryLoudness } from "@/lib/analysis/loudness";
-import { blend, cut, dropIn, echoOut, filterSweep, type TransitionPlan } from "@/lib/audio/transitions";
-import type { Mood, MoodId, Track, TransitionKind } from "@/lib/types";
+import { blend, cut, dialogueIn, dropIn, echoOut, filterSweep, type TransitionPlan } from "@/lib/audio/transitions";
+import type { EntryChoice, Mood, MoodId, Track, TransitionKind } from "@/lib/types";
+import { defaultStart, openerWindow, resolveEntry } from "./cues";
 import { getMood, targetEnergy } from "./moods";
 import { drops } from "@/lib/analysis/structure";
-import { barSeconds, BEATS_PER_BAR, cueIn, dropBuildBars, dropCue, mixOutPoint, nextBoundary, nextDownbeat } from "./mixpoints";
+import { barSeconds, BEATS_PER_BAR, dropBuildBars, mixOutPoint, nextBoundary, nextDownbeat } from "./mixpoints";
 import {
   chooseTransition,
   isMoodJump,
   MAX_SYNC_DELTA,
   MIN_BLEND_CONFIDENCE,
   pickNext,
+  pickOpener,
   rankForRequest,
   type RequestOption,
   type SelectionContext,
@@ -59,6 +61,12 @@ export interface UpNext {
   at: number;
   /** Staff chose this track. */
   requested: boolean;
+  /** How staff want it to come in (booth "Start from"). */
+  entry: EntryChoice;
+  /** Track position it starts playing from (a dialogue's start when it has one). */
+  startAt: number;
+  /** Desi Night: this mix only happens on Drop (or by itself near the end of the song). */
+  holding: boolean;
 }
 
 export interface Standby {
@@ -103,6 +111,8 @@ export interface BoothSnapshot {
   mix: { start: number; end: number; drop?: number } | null;
   /** Track position on the live deck where the next transition starts. */
   mixOutPosition: number | null;
+  /** The live deck is still playing a dialogue before its drop: Drop waits. */
+  dropLocked: boolean;
 }
 
 export interface AutoDJDeps {
@@ -124,6 +134,9 @@ interface Planned {
   requested: boolean;
   /** Staff pressed Drop for this one (an automatic drop swap can still be pulled forward). */
   staffDrop: boolean;
+  entry: EntryChoice;
+  startAt: number;
+  holding: boolean;
 }
 
 interface Loaded {
@@ -154,6 +167,8 @@ export class AutoDJ {
   private dropRequested = false;
   /** Tracks staff requested; they play before the auto-DJ's own picks. */
   private requests: Track[] = [];
+  /** While the set opener plays: the track position where it auto-drops into the party. */
+  private openerEnd: number | null = null;
   private planning = false;
   private recovering = false;
   private watchdog: ReturnType<typeof setInterval> | null = null;
@@ -201,7 +216,13 @@ export class AutoDJ {
     this.error = null;
     this.generation++;
     const gen = this.generation;
-    const first = await this.loadNextTrack(this.selectionContext(), new Set(), true);
+    // Moods with an opener (Desi Night) start the set with a slow song's hook.
+    const opener = pickOpener(this.deps.getTracks(), this.mood);
+    const openerBuffer = opener ? await this.decodeTrack(opener) : null;
+    const first: Loaded | null =
+      opener && openerBuffer
+        ? { track: opener, buffer: openerBuffer, requested: false }
+        : await this.loadNextTrack(this.selectionContext(), new Set(), true);
     if (!first || gen !== this.generation) {
       if (first?.requested) this.requests.unshift(first.track);
       this.playing = false;
@@ -213,7 +234,13 @@ export class AutoDJ {
     deck.load(first.track, first.buffer, this.loudnessTarget());
     deck.resetControls(1);
     const when = this.engine.now + 0.1;
-    deck.start(when, 0, 1);
+    const isOpener = first.track === opener;
+    const window = isOpener ? openerWindow(first.track) : null;
+    deck.start(when, window ? window.start : defaultStart(first.track), 1);
+    this.openerEnd = window ? window.end : null;
+    // Pick the party track against the mood's tempo, not the slow opener's.
+    this.jump = isOpener;
+    if (isOpener) this.note = `Opening with the hook of ${first.track.title}`;
     this.current = { deck, track: first.track, startedAt: when };
     this.remember(first.track);
     this.deps.onPlayed?.(first.track, "start", first.requested, this.mood.id);
@@ -229,6 +256,7 @@ export class AutoDJ {
     this.cancelPlanned();
     this.stopWatchdog();
     this.dropRequested = false;
+    this.openerEnd = null;
     await this.engine.fadeOutAndStop(STOP_FADE_SECONDS);
     for (const d of this.engine.decks) d.unload();
     this.current = null;
@@ -269,25 +297,46 @@ export class AutoDJ {
    */
   drop(): boolean {
     if (!this.playing || !this.current || this.recovering) return false;
+    // The live song is still in its dialogue: let it reach its drop first.
+    if (this.current.deck.pendingJump() !== null) return false;
     const p = this.planned;
     if (p && p.plan.start <= this.engine.now + SCHEDULE_MARGIN) return false;
     if (p?.staffDrop) return true;
     this.dropRequested = true;
-    if (p?.deck.buffer) {
-      const { track, deck, requested } = p;
-      const buffer = deck.buffer!;
-      clearTimeout(p.timer);
-      deck.stopNow();
-      deck.resetControls(0);
-      this.planned = null;
-      // The planned mix hasn't started: drop its automation, keep the music at full level.
-      this.current.deck.resetControls(1);
-      this.schedule(track, buffer, requested);
-    } else {
-      // Still choosing / decoding: schedule() picks the request up.
-      void this.planNext();
-    }
+    const up = this.unplan();
+    if (up) this.schedule(up.track, up.buffer, up.requested, up.entry);
+    // Still choosing / decoding: schedule() picks the request up.
+    else void this.planNext();
     return true;
+  }
+
+  /**
+   * Staff chose where the cued song comes in (booth "Start from"). Re-plans
+   * the cued transition; ignored once it is under way.
+   */
+  setEntry(choice: EntryChoice): boolean {
+    const p = this.planned;
+    if (!this.playing || !p || p.plan.start <= this.engine.now + SCHEDULE_MARGIN) return false;
+    this.dropRequested = p.staffDrop;
+    const up = this.unplan();
+    if (!up) return false;
+    this.schedule(up.track, up.buffer, up.requested, choice);
+    return true;
+  }
+
+  /** Take back a cued transition that hasn't started, keeping its decoded track for a re-plan. */
+  private unplan(): { track: Track; buffer: AudioBuffer; requested: boolean; entry: EntryChoice } | null {
+    const p = this.planned;
+    if (!p?.deck.buffer) return null;
+    const buffer = p.deck.buffer;
+    clearTimeout(p.timer);
+    p.deck.stopNow();
+    p.deck.resetControls(0);
+    this.planned = null;
+    if (p.plan.kind === "drop") this.engine.fx.stopRiser();
+    // The planned mix hasn't started: drop its automation, keep the music at full level.
+    this.current?.deck.resetControls(1);
+    return { track: p.track, buffer, requested: p.requested, entry: p.entry };
   }
 
   /**
@@ -436,96 +485,125 @@ export class AutoDJ {
     }
   }
 
-  private schedule(track: Track, buffer: AudioBuffer, requested = false): void {
+  /**
+   * Plan how `track` comes in. Two families:
+   *  - Landing entries, where a point of the song lands on the beat: its drop
+   *    (drop swap: build-up when tempos sync, else a cut with an echo tail) or,
+   *    when it has a dialogue marker, its dialogue followed by a jump to the
+   *    drop. Used for staff Drop, the set opener's auto-drop, Desi Night's
+   *    songs (`holdForDrop`), peak-time drop swaps, and a "Start from" of
+   *    dialogue / hook / drop.
+   *  - Blends (blend, filter sweep, echo-out, cut) for everything else, from
+   *    the song's default start or a "Start from" of beginning / bar.
+   */
+  private schedule(track: Track, buffer: AudioBuffer, requested = false, entry: EntryChoice = { kind: "auto" }): void {
     const cur = this.current!;
     const a = cur.track.analysis!;
     const b = track.analysis!;
     const tl = cur.deck.timeline!;
     const now = this.engine.now;
+    const mood = this.mood;
+    const earliest = tl.positionAt(now + SCHEDULE_MARGIN);
 
     const curBpm = a.bpm * tl.rateAt(now);
-    const drop = this.dropRequested;
+    const staffDrop = this.dropRequested;
     this.dropRequested = false;
-    const planned: TransitionKind = drop ? "drop" : chooseTransition(cur.track, track, curBpm, this.jump);
-    const bars = planned === "blend" ? this.mood.blendBars : 8;
+    const opener = this.openerEnd !== null;
+    // Desi Night holds each song (after the opener) until Drop; it still leaves near the end on its own.
+    const holding = !!mood.holdForDrop && !opener && !staffDrop;
+    const planned: TransitionKind = chooseTransition(cur.track, track, curBpm, this.jump);
+    const bars = planned === "blend" ? mood.blendBars : 8;
     // Bars from the transition's start to its hand-over, which should land
     // where the outgoing track breaks down: a blend's bass swap is halfway,
     // a filter sweep's crossover about halfway, an echo-out or cut at once.
     const leadBars = planned === "blend" ? Math.floor(bars / 2) : planned === "filterSweep" ? 4 : 0;
+    const resolved = resolveEntry(track, entry);
+    const hasDrop = !!b.barLevels && drops(b.barLevels, b.fullLevel).length > 0;
+    const chosenLanding = entry.kind === "dialogue" || entry.kind === "hook" || entry.kind === "drop";
     // Peak-time moods swap onto the next track's drop where a blend would have
     // swapped basslines — only when the blend could beat-match and a drop exists.
-    const autoSwap = planned === "blend" && this.mood.dropSwap && !!b.barLevels && drops(b.barLevels, b.fullLevel).length > 0;
-    const kind: TransitionKind = autoSwap ? "drop" : planned;
-
-    let mixPos = drop
-      ? nextBoundary(a, tl.positionAt(now + SCHEDULE_MARGIN), DROP_BOUNDARY_BARS)
-      : mixOutPoint(a, bars, tl.positionAt(now + SCHEDULE_MARGIN), this.mood, leadBars);
-    let t = tl.timeAt(mixPos);
-    if (t < now + 1) {
-      mixPos = nextDownbeat(a, tl.positionAt(now + SCHEDULE_MARGIN));
-      t = tl.timeAt(mixPos);
-    }
+    const autoSwap = planned === "blend" && mood.dropSwap && hasDrop;
+    const landing = staffDrop || opener || !!mood.holdForDrop || chosenLanding || autoSwap;
 
     const inc = this.engine.freeDeck([cur.deck, ...(this.standby ? [this.standby.deck] : [])]);
     if (!inc) return;
     inc.load(track, buffer, this.loudnessTarget());
 
-    const outBpmAtT = a.bpm * tl.rateAt(t);
-    const outBeat = 60 / outBpmAtT;
-    // A drop keeps the tempo when it's close enough to sync; otherwise it lands at its own tempo.
-    const synced = kind === "blend" || kind === "filterSweep" || (kind === "drop" && Math.abs(outBpmAtT / b.bpm - 1) <= MAX_SYNC_DELTA);
-    const rate = synced ? outBpmAtT / b.bpm : 1;
-
-    let offset = cueIn(b);
     let plan: TransitionPlan;
-    switch (kind) {
-      case "blend":
-        plan = blend(cur.deck, inc, t, bars, outBeat);
-        break;
-      case "filterSweep":
-        plan = filterSweep(cur.deck, inc, t, outBeat);
-        break;
-      case "echoOut":
-        plan = echoOut(cur.deck, inc, t, outBeat);
-        break;
-      case "drop": {
-        // Land the incoming drop on a 4-bar boundary far enough ahead for a
-        // build-up; start the incoming track that many bars before its drop.
-        const cue = dropCue(b);
-        const outBar = 4 * outBeat;
+    let rate = 1;
+    let synced = false;
+    let startAt: number;
+
+    if (!landing) {
+      let mixPos = mixOutPoint(a, bars, earliest, mood, leadBars);
+      let t = tl.timeAt(mixPos);
+      if (t < now + 1) {
+        mixPos = nextDownbeat(a, earliest);
+        t = tl.timeAt(mixPos);
+      }
+      const outBpm = a.bpm * tl.rateAt(t);
+      const outBeat = 60 / outBpm;
+      synced = planned === "blend" || planned === "filterSweep";
+      rate = synced ? outBpm / b.bpm : 1;
+      startAt = entry.kind === "auto" ? defaultStart(track) : resolved.land;
+      if (planned === "blend") plan = blend(cur.deck, inc, t, bars, outBeat);
+      else if (planned === "filterSweep") plan = filterSweep(cur.deck, inc, t, outBeat);
+      else if (planned === "echoOut") plan = echoOut(cur.deck, inc, t, outBeat);
+      else plan = cut(cur.deck, inc, t);
+      inc.start(plan.start, startAt, rate);
+    } else {
+      // When the landing point (drop, or the dialogue's start) reaches the room.
+      let T: number;
+      if (staffDrop) T = tl.timeAt(nextBoundary(a, earliest, resolved.dialogue ? 1 : DROP_BOUNDARY_BARS));
+      else if (opener) T = tl.timeAt(Math.max(this.openerEnd!, earliest));
+      // Desi Night: near the end of the song (the outro), unless Drop comes first.
+      else if (mood.holdForDrop) T = tl.timeAt(mixOutPoint(a, 8, earliest));
+      // On the breakdown a blend's bass swap was aimed at.
+      else T = tl.timeAt(mixOutPoint(a, bars, earliest, mood, leadBars) + leadBars * barSeconds(a));
+      if (T < now + 1) T = tl.timeAt(nextDownbeat(a, earliest));
+      const outBpm = a.bpm * tl.rateAt(T);
+      const outBeat = 60 / outBpm;
+      const outBar = 4 * outBeat;
+
+      if (resolved.dialogue) {
+        // Dialogue in the clear, then straight to the drop (at the song's own tempo).
+        const d = resolved.dialogue;
+        const dropAt = T + (d.end - d.start);
+        plan = dialogueIn(cur.deck, inc, T, dropAt, outBeat);
+        startAt = d.start;
+        inc.start(T, d.start, 1, { at: dropAt, to: resolved.land });
+      } else {
+        synced = Math.abs(outBpm / b.bpm - 1) <= MAX_SYNC_DELTA;
+        rate = synced ? outBpm / b.bpm : 1;
         const canBuild = synced && a.beatConfidence >= MIN_BLEND_CONFIDENCE && b.beatConfidence >= MIN_BLEND_CONFIDENCE;
-        let land = t;
+        let land = T;
         let build = 0;
         if (canBuild) {
-          land = autoSwap
-            ? // On the breakdown the blend's bass swap was aimed at.
-              tl.timeAt(mixPos + leadBars * barSeconds(a))
-            : tl.timeAt(nextBoundary(a, tl.positionAt(now + SCHEDULE_MARGIN + MIN_DROP_BUILD_BARS * outBar), DROP_BOUNDARY_BARS));
-          build = dropBuildBars(land - (now + SCHEDULE_MARGIN), outBar, cue, rate, MAX_DROP_BUILD_BARS);
+          // A staff Drop lands on a 4-bar boundary far enough ahead for a build-up.
+          if (staffDrop) land = tl.timeAt(nextBoundary(a, tl.positionAt(now + SCHEDULE_MARGIN + MIN_DROP_BUILD_BARS * outBar), DROP_BOUNDARY_BARS));
+          build = dropBuildBars(land - (now + SCHEDULE_MARGIN), outBar, resolved.land, rate, MAX_DROP_BUILD_BARS);
         }
         // outBar × rate is one incoming bar, so the offset stays on the incoming grid.
-        offset = cue - build * outBar * rate;
+        startAt = resolved.land - build * outBar * rate;
         plan = dropIn(cur.deck, inc, land - build * outBar, land, outBeat);
-        break;
+        inc.start(plan.start, startAt, rate);
+        // A staff Drop or the opener's auto-drop gets a noise riser that peaks as the drop hits.
+        if (staffDrop || opener) {
+          const from = build > 0 ? plan.start : Math.max(now + SCHEDULE_MARGIN, land - 2 * outBar);
+          const delay = this.engine.outputDelay;
+          if (land - from > 1) this.engine.fx.riserBetween(from + delay, land + delay);
+        }
       }
-      default:
-        plan = cut(cur.deck, inc, t);
     }
 
-    inc.start(plan.start, offset, rate);
-    // A staff Drop gets a noise riser that peaks exactly as the drop hits.
-    if (drop && plan.drop !== undefined && plan.drop - plan.start > 1) {
-      const delay = this.engine.outputDelay;
-      this.engine.fx.riserBetween(plan.start + delay, plan.drop + delay);
-    }
     if (synced && Math.abs(rate - 1) > 0.001) {
-      const handBack = TEMPO_HANDBACK_BARS * 4 * (60 / outBpmAtT);
+      const handBack = TEMPO_HANDBACK_BARS * 4 * (60 / (a.bpm * tl.rateAt(plan.start)));
       inc.rampRate(plan.end, plan.end + handBack, 1);
     }
     // The outgoing deck is silent from plan.end; handover() stops and unloads it.
 
     const timer = setTimeout(() => this.handover(), Math.max(0, (plan.end - this.engine.now) * 1000) + 60);
-    this.planned = { deck: inc, track, plan, timer, requested, staffDrop: drop };
+    this.planned = { deck: inc, track, plan, timer, requested, staffDrop, entry, startAt, holding };
     this.emit();
   }
 
@@ -540,6 +618,9 @@ export class AutoDJ {
     }
     // Drops and filter sweeps leave the incoming filter at an inaudible extreme.
     p.deck.clearFilter();
+    // The opener has dropped into the party: its note is done.
+    if (this.openerEnd !== null) this.note = null;
+    this.openerEnd = null;
     this.current = { deck: p.deck, track: p.track, startedAt: p.plan.start };
     this.remember(p.track);
     this.deps.onPlayed?.(p.track, p.plan.kind, p.requested, this.mood.id);
@@ -661,7 +742,8 @@ export class AutoDJ {
       if (!deck.buffer) deck.load(next.track, next.buffer, this.loudnessTarget());
       deck.resetControls(1);
       const when = this.engine.now + 0.05;
-      deck.start(when, cueIn(next.track.analysis!), 1);
+      this.openerEnd = null;
+      deck.start(when, defaultStart(next.track), 1);
       this.current = { deck, track: next.track, startedAt: when };
       this.remember(next.track);
       this.deps.onPlayed?.(next.track, "recovery", next.requested, this.mood.id);
@@ -697,6 +779,7 @@ export class AutoDJ {
       ),
       mix: p ? { start: p.plan.start, end: p.plan.end, drop: p.plan.drop } : null,
       mixOutPosition: p && liveTl ? liveTl.positionAt(p.plan.start) : null,
+      dropLocked: this.current?.deck.pendingJump(this.engine.now) != null,
     };
   }
 
@@ -714,7 +797,18 @@ export class AutoDJ {
             startedAt: c.startedAt,
           }
         : null,
-      next: p ? { track: p.track, deck: p.deck.index, transition: p.plan.kind, at: p.plan.start, requested: p.requested } : null,
+      next: p
+        ? {
+            track: p.track,
+            deck: p.deck.index,
+            transition: p.plan.kind,
+            at: p.plan.start,
+            requested: p.requested,
+            entry: p.entry,
+            startAt: p.startAt,
+            holding: p.holding,
+          }
+        : null,
       queue: [...this.requests],
       standby: this.standby ? { track: this.standby.track, deck: this.standby.deck.index } : null,
       note: this.note,
