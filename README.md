@@ -32,7 +32,9 @@ Open http://localhost:3000, then:
    them — only for songs that match in tempo and key.
    **🎧 Cue** on a loaded or cued deck plays it in your headphones (the preview output); **Set start here** makes
    that its start. The picker's **▶** previews a song before you choose it. On a loaded or cued deck you can
-   also turn the **jog wheel** (drag, scroll, or click it and use the arrow keys) to move its start point.
+   also turn the **jog wheel** (drag, scroll, or click it and use the arrow keys) to move its start point — it
+   scratches on the club speakers as you turn it (during a set, over the music).
+   **Volume** under the level meter sets the club speakers' master volume (saved; headphones aren't affected).
 
 ## Running at a venue
 

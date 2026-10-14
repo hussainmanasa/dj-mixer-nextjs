@@ -42,6 +42,11 @@ interface SessionState {
   ejectDeck: (deck: number) => void;
   /** "Start from" for a loaded deck: where Deck A starts, or how a later deck comes in. */
   setPreloadEntry: (deck: number, choice: EntryChoice) => void;
+  /** Jog wheel on a loaded or cued deck: scratch its song on the club speakers (`step`: a short blip). */
+  scratch: (track: Track, position: number, step: boolean) => void;
+  scratchEnd: () => void;
+  /** Master volume on the club speakers, 0..1 (saved in the settings). */
+  setVolume: (volume: number) => void;
   /** Fire an effect on the whole mix, on the next beat. */
   fx: (kind: FxKind) => void;
   /** Staff request: `next` replaces the cued track, otherwise it joins the queue. */
@@ -58,6 +63,54 @@ interface SessionState {
 
 let dj: AutoDJ | null = null;
 let autoResumeTried = false;
+
+/**
+ * The AutoDJ (and its audio engine) for the current settings, created on first
+ * use: Play, or a scratch before Play. While stopped it is re-created if the
+ * deck count or key-lock setting changed.
+ */
+async function ensureDj(
+  set: (s: Partial<SessionState>) => void,
+  get: () => SessionState,
+): Promise<AutoDJ> {
+  const { deckCount, keyLock, mainOutput, volume } = useLibrary.getState().settings;
+  if (dj && !dj.isPlaying && (dj.engine.decks.length !== deckCount || dj.keyLock !== keyLock)) {
+    const old = dj;
+    dj = null;
+    await old.dispose();
+  }
+  if (dj) return dj;
+  const created = new AutoDJ(deckCount, get().status.mood, {
+    getTracks: () => readyTracks(useLibrary.getState().tracks),
+    getFile: (t) => useLibrary.getState().getFile(t),
+    onTrackError: (id, msg) => useLibrary.getState().markError(id, msg),
+    resolveMood: (id) => resolveMood(id, useLibrary.getState().settings.moods),
+    onStatus: (status) => {
+      set({ status });
+      // Save the queue whenever it changes so a reload can restore it.
+      if (status.queue.map((t) => t.id).join(",") !== lastQueueKey) persist(status.mood, status.playing, status.queue);
+    },
+    onPlayed: (t, how, requested, mood) =>
+      void appendSetLog({
+        at: Date.now(),
+        trackId: t.id,
+        title: t.title,
+        artist: t.artist,
+        path: t.path.replace(/^session:/, ""),
+        mood,
+        how,
+        requested,
+        bpm: t.analysis?.bpm ?? 0,
+        key: t.camelot,
+        duration: t.analysis?.duration ?? 0,
+      }),
+  }, keyLock);
+  dj = created;
+  created.engine.setVolume(volume);
+  // The mix goes to the club speakers chosen on the Library page.
+  await created.engine.setOutput(mainOutput);
+  return created;
+}
 
 const idle = (mood: MoodId, deckCount: number): AutoDJStatus => ({
   playing: false,
@@ -109,39 +162,9 @@ export const useSession = create<SessionState>((set, get) => ({
         set({ status: { ...get().status, error: "Allow access to the music folder to start." } });
         return;
       }
-      const { deckCount, keyLock } = lib.settings;
-      // Re-create the engine if the deck count or key-lock setting changed.
-      if (dj && (dj.engine.decks.length !== deckCount || dj.keyLock !== keyLock)) {
-        await dj.dispose();
-        dj = null;
-      }
-      dj ??= new AutoDJ(deckCount, get().status.mood, {
-        getTracks: () => readyTracks(useLibrary.getState().tracks),
-        getFile: (t) => useLibrary.getState().getFile(t),
-        onTrackError: (id, msg) => useLibrary.getState().markError(id, msg),
-        resolveMood: (id) => resolveMood(id, useLibrary.getState().settings.moods),
-        onStatus: (status) => {
-          set({ status });
-          // Save the queue whenever it changes so a reload can restore it.
-          if (status.queue.map((t) => t.id).join(",") !== lastQueueKey) persist(status.mood, status.playing, status.queue);
-        },
-        onPlayed: (t, how, requested, mood) =>
-          void appendSetLog({
-            at: Date.now(),
-            trackId: t.id,
-            title: t.title,
-            artist: t.artist,
-            path: t.path.replace(/^session:/, ""),
-            mood,
-            how,
-            requested,
-            bpm: t.analysis?.bpm ?? 0,
-            key: t.camelot,
-            duration: t.analysis?.duration ?? 0,
-          }),
-      }, keyLock);
+      const { deckCount } = lib.settings;
+      const dj = await ensureDj(set, get);
       dj.setMood(get().status.mood);
-      // The mix goes to the club speakers chosen on the Library page.
       await dj.engine.setOutput(lib.settings.mainOutput);
       // Requests made before the first Play.
       for (const t of get().status.queue) dj.request(t, false);
@@ -190,6 +213,22 @@ export const useSession = create<SessionState>((set, get) => ({
 
   fx(kind) {
     dj?.fx(kind);
+  },
+
+  scratch(track, position, step) {
+    if (get().starting || get().stopping) return;
+    void ensureDj(set, get)
+      .then((d) => d.scratch(track, position, step))
+      .catch(() => undefined);
+  },
+
+  scratchEnd() {
+    dj?.scratchEnd();
+  },
+
+  setVolume(volume) {
+    useLibrary.getState().setVolume(volume);
+    dj?.engine.setVolume(useLibrary.getState().settings.volume);
   },
 
   setEntry(choice) {

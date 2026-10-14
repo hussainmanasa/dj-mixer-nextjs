@@ -29,7 +29,9 @@ Full product plan: https://claude.ai/code/artifact/903692c7-9f12-49a9-9de1-5a82b
    preview** on a separate output (headphones): Cue a loaded or cued deck and "Set start here", preview songs in
    the picker. Cue never touches the mix. Also the **jog wheel on a loaded or cued deck** sets its start point
    (drag, scroll, keys); the deck on air stays display-only — scrubbing it would jump the music the crowd
-   hears and break the auto-DJ's beat-matching, which is timed against its position.
+   hears and break the auto-DJ's beat-matching, which is timed against its position. From 14 Oct 2026 (owner):
+   turning that jog wheel **scratches on the club speakers** (not the headphones), also over the music during a
+   set, and the booth has a **master volume** for the club speakers.
    Every action goes through `AutoDJ`: it still beat-matches, chooses the transition, times it on the grid
    and steers back to the mood. Do not add manual decks, crossfader, per-deck EQ/faders, jog control,
    skip/seek, energy slider or tempo controls, and never let UI write to deck automation directly.
@@ -80,7 +82,10 @@ lib/
   audio/
     timeline.ts               PURE: context time ↔ track position under rate ramps and one jump
     deck.ts                   client: source → trim → 3-band EQ → filter → fader → out [→ key-lock]
-    engine.ts                 client: N decks → master → effects → limiter → analysers (meter, watchdog) → out
+    engine.ts                 client: N decks + scratch → master → effects → limiter → analysers (meter, watchdog)
+                              → master volume → out
+    scratch.ts                client: jog-wheel scratch on the engine (loads public/worklets/scrub.js)
+    volume.ts                 PURE: master volume slider → gain
     transitions.ts            client: blend, filterSweep, echoOut, cut, dropIn, dialogueIn automation
     fx.ts                     client: staff effects on the master (echo, filter, reverb, noise riser)
     keylock.ts                client: loads public/worklets/keylock.js (phase-vocoder pitch corrector)
@@ -97,6 +102,7 @@ store/
 types/fs-access.d.ts          File System Access API typings
 public/sw.js                  service worker (offline app shell)
 public/worklets/keylock.js    key-lock AudioWorklet (plain JS; DSP unit-tested in lib/audio/keylock.test.ts)
+public/worklets/scrub.js      jog-wheel scratch AudioWorklet (plain JS; unit-tested in lib/audio/scrub.test.ts)
 e2e/                          Playwright tests against the production build, with generated fixture tracks
 ```
 
@@ -271,7 +277,25 @@ Jog wheel (`JogWheel` with `scrub`, loaded and cued decks until their mix begins
 Shift = 1 bar), scroll (1 beat a notch) or keys (←/→ beat, Shift bar, PageUp/PageDown 8 bars, Home). It shows
 the start point (platter angle, "Bar 11.2", the overview's ⚑ moves live) and saves it on release / after a
 pause as a beat-snapped fractional bar entry (`beatBar`; `{ kind: "bar", bar: 10.25 }` = bar 11, beat 2) through
-the same `setEntry` / `setPreloadEntry` as Start from; a playing cue jumps there.
+the same `setEntry` / `setPreloadEntry` as Start from.
+
+Scratch (owner decision: on the club speakers): turning the wheel plays the song like a record under a hand,
+on the mix's engine — `useSession.scratch` → `AutoDJ.scratch(track, position, step)` → `engine.scratch`
+(`Scratch`, `lib/audio/scratch.ts`) into the master, so it goes through the effects, limiter and master volume.
+It hands the ±20 s around the position to the `scrub` worklet (`public/worklets/scrub.js`), which chases the
+wheel (forwards, backwards, up to 6× speed, silent when the wheel stops, louder the faster it turns). A drag
+sends `target`; a key / scroll step sends `play` (a 0.25 s blip from the new beat); release sends `end`. It is
+sound only — it never moves a deck or its automation. Before Play the engine is created on the first scratch
+(`ensureDj` in `store/session.ts`, also used by Play) and the loaded song is decoded once; if it is Deck A's song,
+Play reuses that buffer. During a set the cued deck's own buffer is used (silent until it's decoded — no extra
+copy in memory), so a scratch plays over the music on the same speakers. A playing cue (headphones) pauses
+while scratching and resumes from the new start on release; the scratch ends if the deck's mix starts mid-drag.
+
+Master volume (booth, under the level meter; `settings.volume`, 0..1, saved): `engine.volume` is the last gain
+before the speakers, a squared taper (`volumeGain`: 50% ≈ −12 dB, never a boost), gliding 30 ms so the slider
+never clicks. It sits **after** the meter and the watchdog's analyser, so turning it down (even to 0) never
+reads as silence and never triggers a recovery; the booth warns "Volume is at 0" while a set plays. It doesn't
+affect previews (headphones). Set before Play, it applies when the engine is created.
 
 Start from: `AutoDJ.setEntry(choice)` re-plans the cued transition (like Drop and requests: only before it is
 under way) and the cued deck's overview shows a ⚑ where it will start.
@@ -338,7 +362,8 @@ device, and starts `next start -p 3100` (build first). Audio runs for real; noth
 - The incoming track always starts at its first downbeat and plays its whole intro inside the blend
   (except drop swaps, which start a few bars before its drop).
 - Session-only tracks ("Add files") vanish on reload, so queued session tracks do too.
-- Grid preview shares the club speakers, so it is disabled while the booth plays (no separate cue output).
+- Previews (grid, Cue, picker) are disabled while the booth plays unless a separate preview output
+  is chosen (Library → Audio outputs).
 - Offline: in-app navigation waits for the network; a full reload of a visited page works.
 - The set log, settings and edits live in this browser's IndexedDB only (no server, no backup) — export CSVs.
 - Desi Night: the opener only happens when a set starts in Desi Night, not on a mid-set switch (by design).
@@ -354,6 +379,10 @@ device, and starts `next start -p 3100` (build first). Audio runs for real; noth
   headphones must be different devices for Cue during a set. A Bluetooth drop can't be detected (the mix keeps
   "playing" inside the app), and `outputLatency` is the browser's estimate. Choosing two different outputs can't
   be tested headless (no devices); the e2e test covers the shared-output path.
+- The jog scratch is a simple varispeed: no vinyl noise, no key-lock, no volume matching, and the wheel's momentum
+  stops when you let go (no spin-out). During a set it plays the cued song over the music (owner's choice);
+  key / scroll steps blip there too. Only tested headless (the output is measured, not heard).
+- The level meter shows the mix before the master volume, so it still moves with the volume at 0.
 - The editor preview doesn't apply key-lock or volume matching, so it can sound slightly different from the booth.
 - Layer uses two decks (the playing and the cued). Layering a third song, or an a-cappella crate over the running
   mix on decks C/D, isn't built; nor is vocal separation (needs an ML model).

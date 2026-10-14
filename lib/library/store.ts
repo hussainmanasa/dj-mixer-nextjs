@@ -27,6 +27,8 @@ export interface Settings {
   mainOutput: string;
   /** Output for previews and Cue (headphones), e.g. USB-C or HDMI. null = not chosen (previews use the default). */
   previewOutput: string | null;
+  /** Master volume on the club speakers, 0..1 (the booth's volume slider). */
+  volume: number;
 }
 
 export interface LastSession {
@@ -37,7 +39,7 @@ export interface LastSession {
   updatedAt: number;
 }
 
-export const DEFAULT_SETTINGS: Settings = { deckCount: 2, keyLock: false, moods: {}, mainOutput: "", previewOutput: null };
+export const DEFAULT_SETTINGS: Settings = { deckCount: 2, keyLock: false, moods: {}, mainOutput: "", previewOutput: null, volume: 1 };
 
 export async function loadFolderHandle(): Promise<FileSystemDirectoryHandle | undefined> {
   return db ? get<FileSystemDirectoryHandle>(KEYS.folder, db) : undefined;

@@ -42,6 +42,8 @@ interface LibraryState {
   retryFailed: () => Promise<void>;
   setDeckCount: (n: number) => Promise<void>;
   setKeyLock: (on: boolean) => Promise<void>;
+  /** Master volume (0..1), saved so it survives a reload. Applied to the mix by `useSession.setVolume`. */
+  setVolume: (volume: number) => void;
   /** Choose the club speakers (mix) and the preview / cue output. */
   setOutputs: (outputs: { mainOutput?: string; previewOutput?: string | null }) => Promise<void>;
   /** Save an edited mood (only the fields that differ from the preset are stored); null resets it. */
@@ -73,6 +75,8 @@ function persistTracks(tracks: Record<string, Track>): Promise<void> {
   for (const t of Object.values(tracks)) if (!t.path.startsWith(SESSION_PREFIX)) keep[t.id] = t;
   return saveTracks(keep);
 }
+
+let volumeSave: ReturnType<typeof setTimeout> | undefined;
 
 export const useLibrary = create<LibraryState>((set, get) => ({
   hydrated: false,
@@ -201,6 +205,14 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     const settings = { ...get().settings, keyLock: on };
     set({ settings });
     await saveSettings(settings);
+  },
+
+  setVolume(volume) {
+    const settings = { ...get().settings, volume: Math.max(0, Math.min(1, volume)) };
+    set({ settings });
+    // A slider sends many changes: save once it settles.
+    clearTimeout(volumeSave);
+    volumeSave = setTimeout(() => void saveSettings(useLibrary.getState().settings), 300);
   },
 
   async saveMood(mood, id) {

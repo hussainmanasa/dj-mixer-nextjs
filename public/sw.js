@@ -6,8 +6,8 @@
 //   pages and RSC data     network-first, cached copy when offline
 //   other same-origin GETs stale-while-revalidate (worklets, manifest, icons)
 
-const CACHE = "ai-dj-v1";
-const CORE = ["/booth", "/library", "/moods", "/history", "/worklets/keylock.js", "/manifest.webmanifest", "/favicon.ico"];
+const CACHE = "ai-dj-v2";
+const CORE = ["/booth", "/library", "/moods", "/history", "/worklets/keylock.js", "/worklets/scrub.js", "/manifest.webmanifest", "/favicon.ico"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

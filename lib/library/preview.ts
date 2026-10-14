@@ -26,7 +26,7 @@ export class GridPreview {
   static sinkId = "";
 
   private ctx: AudioContext | null = null;
-  private cache: { file: Blob; buffer: AudioBuffer } | null = null;
+  private cache: { file: Blob; buffer: Promise<AudioBuffer> } | null = null;
   private nodes: AudioScheduledSourceNode[] = [];
   private clock: { t0: number; from: number; jump?: { at: number; to: number } } | null = null;
   /** Called when playback ends on its own. */
@@ -40,12 +40,8 @@ export class GridPreview {
   /** Play from a track position; see PlayOptions. */
   async playFrom(file: Blob, from: number, opts: PlayOptions = {}): Promise<void> {
     this.stop();
-    this.ctx ??= new AudioContext({ latencyHint: "interactive" });
-    await routeTo(this.ctx, GridPreview.sinkId);
-    await this.ctx.resume();
-    if (this.cache?.file !== file) this.cache = { file, buffer: await this.ctx.decodeAudioData(await file.arrayBuffer()) };
-    const ctx = this.ctx;
-    const buffer = this.cache.buffer;
+    const ctx = await this.context();
+    const buffer = await this.decoded(file);
     const t0 = ctx.currentTime + 0.1;
     const out = new GainNode(ctx, { gain: 0.8 });
     out.connect(ctx.destination);
@@ -91,6 +87,23 @@ export class GridPreview {
         this.nodes.push(osc);
       }
     }
+  }
+
+  /** The preview context, on the preview output and running. */
+  private async context(): Promise<AudioContext> {
+    this.ctx ??= new AudioContext({ latencyHint: "interactive" });
+    await routeTo(this.ctx, GridPreview.sinkId);
+    await this.ctx.resume();
+    return this.ctx;
+  }
+
+  /** A song decoded once (repeat previews of it start at once). */
+  private decoded(file: Blob): Promise<AudioBuffer> {
+    if (this.cache?.file !== file) {
+      const ctx = this.ctx!;
+      this.cache = { file, buffer: file.arrayBuffer().then((bytes) => ctx.decodeAudioData(bytes)) };
+    }
+    return this.cache.buffer;
   }
 
   /** Current track position of the playhead, or null when stopped. */

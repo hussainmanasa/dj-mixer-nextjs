@@ -211,6 +211,8 @@ export class AutoDJ {
   private planning = false;
   private recovering = false;
   private watchdog: ReturnType<typeof setInterval> | null = null;
+  /** A song decoded for the jog wheel's scratch that isn't on a deck (a deck loaded before Play). */
+  private scratchSong: { id: string; buffer: Promise<AudioBuffer | null> } | null = null;
   private silentSince: number | null = null;
 
   /** Key-lock was requested for this engine (it may still be unavailable). */
@@ -271,7 +273,11 @@ export class AutoDJ {
       this.requestEntries.set(p.track.id, p.entry);
     }
     const loadedFirst = preset?.first;
-    const loadedBuffer = loadedFirst ? await this.decodeTrack(loadedFirst.track) : null;
+    // Deck A's song may already be decoded for a scratch.
+    const scratched = loadedFirst && this.scratchSong?.id === loadedFirst.track.id ? await this.scratchSong.buffer : null;
+    this.scratchSong = null;
+    this.engine.scratch.release();
+    const loadedBuffer = loadedFirst ? (scratched ?? (await this.decodeTrack(loadedFirst.track))) : null;
     // Otherwise moods with an opener (Desi Night) start the set with a slow song's hook.
     const opener = loadedBuffer ? null : pickOpener(this.deps.getTracks(), this.mood);
     const openerBuffer = opener ? await this.decodeTrack(opener) : null;
@@ -504,6 +510,33 @@ export class AutoDJ {
     const t = tl.timeAt(target);
     const end = this.engine.fx.trigger(kind, t + delay, 60 / (a.bpm * tl.rateAt(t)));
     this.noteFx(kind, t + delay, end, false);
+  }
+
+  /**
+   * Jog wheel on a loaded or cued deck: scratch its song at `position` (seconds) on
+   * the club speakers — or, with `step`, play a short stretch from there. Only
+   * sound: it never moves a deck or its automation (the start point is set
+   * through `setEntry` when the wheel is let go).
+   */
+  async scratch(track: Track, position: number, step = false): Promise<void> {
+    // During a set the cued deck holds its song (silent until it's decoded: no extra copy in memory).
+    // Before Play, a loaded deck's song is decoded once here and reused when the set starts.
+    let buffer = this.engine.decks.find((d) => d.track?.id === track.id)?.buffer ?? null;
+    if (!buffer && !this.playing) {
+      let song = this.scratchSong;
+      if (song?.id !== track.id) {
+        song = { id: track.id, buffer: this.deps.getFile(track).then((f) => this.engine.decode(f)).catch(() => null) };
+        this.scratchSong = song;
+      }
+      buffer = await song.buffer;
+    }
+    if (!buffer) return;
+    await this.engine.resume().catch(() => undefined);
+    await this.engine.scratch.move(buffer, position, step);
+  }
+
+  scratchEnd(): void {
+    this.engine.scratch.end();
   }
 
   async dispose(): Promise<void> {

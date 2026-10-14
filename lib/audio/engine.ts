@@ -1,5 +1,6 @@
-// The audio graph: N decks (2–4) → master bus → effects → limiter → speakers, with
-// analysers on the master for level metering and silence detection.
+// The audio graph: N decks (2–4) and the jog-wheel scratch → master bus → effects →
+// limiter → analysers (level meter, silence watchdog) → master volume → speakers.
+// The analysers sit before the volume, so turning it down is never mistaken for silence.
 // Client-only. Create it from a user gesture (browsers block audio otherwise).
 
 import { MAX_DECKS, MIN_DECKS } from "@/lib/types";
@@ -7,6 +8,8 @@ import { Deck } from "./deck";
 import { MasterFx } from "./fx";
 import { createKeyLock, KEYLOCK_DELAY_SAMPLES, loadKeyLock } from "./keylock";
 import { listOutputs, routeTo } from "./outputs";
+import { Scratch } from "./scratch";
+import { volumeGain } from "./volume";
 
 export class AudioEngine {
   readonly ctx: AudioContext;
@@ -17,6 +20,10 @@ export class AudioEngine {
   readonly analyser: AnalyserNode;
   /** Long window (~0.7 s) so the silence watchdog never falls between beats. */
   readonly watchAnalyser: AnalyserNode;
+  /** The booth's master volume, last before the speakers. */
+  readonly volume: GainNode;
+  /** The jog wheel's scratch, into the master like a deck. */
+  readonly scratch: Scratch;
   readonly decks: Deck[];
   private readonly levelBuf: Float32Array<ArrayBuffer>;
   private readonly watchBuf: Float32Array<ArrayBuffer>;
@@ -38,8 +45,10 @@ export class AudioEngine {
     // Analysers pass audio through unchanged; chaining them keeps both processed.
     this.fx = new MasterFx(this.ctx, this.limiter);
     this.master.connect(this.fx.input);
-    this.limiter.connect(this.analyser).connect(this.watchAnalyser).connect(this.ctx.destination);
+    this.volume = new GainNode(this.ctx, { gain: 1 });
+    this.limiter.connect(this.analyser).connect(this.watchAnalyser).connect(this.volume).connect(this.ctx.destination);
     this.decks = Array.from({ length: n }, (_, i) => new Deck(this.ctx, this.master, i));
+    this.scratch = new Scratch(this.ctx, this.master);
     this.levelBuf = new Float32Array(this.analyser.fftSize);
     this.watchBuf = new Float32Array(this.watchAnalyser.fftSize);
   }
@@ -94,6 +103,12 @@ export class AudioEngine {
    */
   get displayDelay(): number {
     return this.outputDelay + (this.ctx.outputLatency || 0);
+  }
+
+  /** Master volume, 0..1 (see `volumeGain`); a short glide so a slider never clicks. */
+  setVolume(volume: number): void {
+    this.volume.gain.cancelScheduledValues(this.now);
+    this.volume.gain.setTargetAtTime(volumeGain(volume), this.now, 0.03);
   }
 
   get now(): number {

@@ -7,6 +7,7 @@ import { barAt, barLabel, beatBar, entryOptions, type CuePlan } from "@/lib/dj/c
 import { barSeconds } from "@/lib/dj/mixpoints";
 import { useLibrary } from "@/store/library";
 import { usePreview } from "@/store/preview";
+import { useSession } from "@/store/session";
 import type { EntryChoice, Track } from "@/lib/types";
 import { formatTime, setText, useBoothFrame } from "./frame";
 import { JogWheel, type JogScrub } from "./JogWheel";
@@ -74,6 +75,10 @@ export function DeckPanel({
   // Jog wheel: the start point while it's being turned, and whether this deck's mix has begun.
   const [scrubbing, setScrubbing] = useState<number | null>(null);
   const [locked, setLocked] = useState(false);
+  // A scratch in progress: whether a cue should resume after it.
+  const scratch = useRef<{ resumeCue: boolean } | null>(null);
+  const scratchAt = useSession((s) => s.scratch);
+  const scratchEnd = useSession((s) => s.scratchEnd);
   const cueHead = useRef<HTMLSpanElement>(null);
   const cueTag = `cue:${deck}`;
   const lockedRef = useRef(false);
@@ -98,7 +103,6 @@ export function DeckPanel({
       if (role === "live" && !snap.layering) label = "Mixing out";
     }
     setText(badge.current, label);
-    // Once this deck's mix is (about to be) under way, its track can't change.
     // Once this deck's mix is (about to be) under way, its track and start can't change.
     const locked = role === "incoming" && !!snap?.mix && snap.now >= snap.mix.start - SCHEDULE_MARGIN;
     if (locked !== lockedRef.current) {
@@ -107,6 +111,11 @@ export function DeckPanel({
     }
     // Its mix is starting: the song is about to be on the club speakers, so its cue stops.
     if (locked && usePreview.getState().playing === cueTag) usePreview.getState().stop();
+    // And the jog wheel goes away mid-scratch: let the scratch go too.
+    if (locked && scratch.current) {
+      scratch.current = null;
+      scratchEnd();
+    }
     if (choose.current) choose.current.style.display = locked ? "none" : "";
     if (startFrom.current) startFrom.current.style.display = locked ? "none" : "";
     // Cue playhead (the preview player's position, not the deck's).
@@ -137,13 +146,26 @@ export function DeckPanel({
           beat: barSeconds(a) / 4,
           label: `Start point, Deck ${DECK_LETTERS[deck]}`,
           valueText: (pos) => barLabel(beatBar(a, pos)),
-          onMove: setScrubbing,
+          onMove: (pos, step) => {
+            setScrubbing(pos);
+            // The scratch is heard on the club speakers: a drag follows the wheel, a key / scroll step
+            // plays a short blip. A playing preview pauses while scratching.
+            if (!scratch.current) {
+              const preview = usePreview.getState();
+              scratch.current = { resumeCue: preview.playing === cueTag };
+              if (preview.playing) preview.stop();
+            }
+            scratchAt(track, pos, step);
+          },
           onCommit: (pos) => {
             const bar = beatBar(a, pos);
+            const resumeCue = scratch.current?.resumeCue ?? usePreview.getState().playing === cueTag;
+            scratch.current = null;
+            scratchEnd();
             setScrubbing(null);
             entry.set({ kind: "bar", bar });
-            // A cue that's playing jumps to the new start.
-            if (usePreview.getState().playing === cueTag) {
+            // A cue that was playing carries on from the new start.
+            if (resumeCue) {
               const from = a.firstBeat + bar * barSeconds(a);
               void playPreview(cueTag, async (p) => p.playFrom(await getFile(track), from, { length: 60 }));
             }

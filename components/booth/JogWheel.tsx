@@ -36,8 +36,8 @@ export interface JogScrub {
   label: string;
   /** Shown value, e.g. "Bar 11.2". */
   valueText: (position: number) => string;
-  /** While turning: move the flag and the shown start. */
-  onMove: (position: number) => void;
+  /** While turning: move the flag and the shown start; `step` for a key / scroll step (else a drag). */
+  onMove: (position: number, step: boolean) => void;
   /** Done turning: save it (snapped to the beat). */
   onCommit: (position: number) => void;
 }
@@ -76,12 +76,12 @@ export function JogWheel({
     latest.current = scrub;
   });
 
-  const move = (position: number) => {
+  const move = (position: number, step = false) => {
     const s = latest.current;
     if (!s) return;
     const p = Math.max(0, Math.min(s.duration - 1, position));
     turning.current = p;
-    s.onMove(p);
+    s.onMove(p, step);
     root.current?.setAttribute("aria-valuetext", s.valueText(p));
   };
   const commit = () => {
@@ -98,7 +98,7 @@ export function JogWheel({
   const stepBeats = (n: number) => {
     const s = latest.current;
     if (!s) return;
-    move((turning.current ?? s.position) + n * s.beat);
+    move((turning.current ?? s.position) + n * s.beat, true);
     commitSoon();
   };
 
@@ -147,7 +147,7 @@ export function JogWheel({
     const keys: Record<string, number> = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1, PageUp: 32, PageDown: -32 };
     if (e.key === "Home") {
       e.preventDefault();
-      move(0);
+      move(0, true);
       commitSoon();
     } else if (e.key in keys) {
       e.preventDefault();

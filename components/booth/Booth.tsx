@@ -148,6 +148,7 @@ export function Booth() {
       <LayerButton status={status} live={live} color={color} onPick={() => setPicker({ next: false, layer: true })} />
       <FxPad enabled={live && !!status.now} color={color} />
       <LevelMeter color={color} />
+      <VolumeControl color={color} playing={status.playing} />
       {status.now && <BeatCounter deck={status.now.deck} track={status.now.track} color={color} />}
       {!canPlay && hydrated && (
         <p className="text-center text-muted">
@@ -527,6 +528,36 @@ function Queue({ status, enabled, onAdd }: { status: AutoDJStatus; enabled: bool
           ))}
         </ol>
       )}
+    </div>
+  );
+}
+
+/** Master volume on the club speakers (not the headphones). Saved, so it survives a reload. */
+function VolumeControl({ color, playing }: { color: string; playing: boolean }) {
+  const volume = useLibrary((s) => s.settings.volume);
+  const setVolume = useSession((s) => s.setVolume);
+  const percent = Math.round(volume * 100);
+  return (
+    <div className="flex w-56 flex-col gap-1">
+      <label htmlFor="master-volume" className="flex items-baseline justify-between text-sm font-medium uppercase tracking-wider text-muted">
+        Volume
+        <span className="font-mono text-base text-foreground" aria-hidden>
+          {percent}%
+        </span>
+      </label>
+      <input
+        id="master-volume"
+        type="range"
+        min={0}
+        max={100}
+        step={1}
+        value={percent}
+        aria-valuetext={`${percent}%`}
+        onChange={(e) => setVolume(Number(e.target.value) / 100)}
+        className="h-10 w-full cursor-pointer"
+        style={{ accentColor: color }}
+      />
+      {playing && percent === 0 && <p className="text-center text-sm text-warn">Volume is at 0 — the club hears nothing</p>}
     </div>
   );
 }
