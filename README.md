@@ -31,7 +31,8 @@ Open http://localhost:3000, then:
    **Layer** plays the next song over the current one (its bass off) until you press **Drop**, which swaps
    them — only for songs that match in tempo and key.
    **🎧 Cue** on a loaded or cued deck plays it in your headphones (the preview output); **Set start here** makes
-   that its start. The picker's **▶** previews a song before you choose it.
+   that its start. The picker's **▶** previews a song before you choose it. On a loaded or cued deck you can
+   also turn the **jog wheel** (drag, scroll, or click it and use the arrow keys) to move its start point.
 
 ## Running at a venue
 

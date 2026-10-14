@@ -27,7 +27,9 @@ Full product plan: https://claude.ai/code/artifact/903692c7-9f12-49a9-9de1-5a82b
    **loading songs into decks before Play** (each with its Start from; the auto-DJ takes over after them), and
    **Layer** (two songs together until Drop swaps them; only songs that match in tempo and key), and **Cue /
    preview** on a separate output (headphones): Cue a loaded or cued deck and "Set start here", preview songs in
-   the picker. Cue never touches the mix.
+   the picker. Cue never touches the mix. Also the **jog wheel on a loaded or cued deck** sets its start point
+   (drag, scroll, keys); the deck on air stays display-only — scrubbing it would jump the music the crowd
+   hears and break the auto-DJ's beat-matching, which is timed against its position.
    Every action goes through `AutoDJ`: it still beat-matches, chooses the transition, times it on the grid
    and steers back to the mood. Do not add manual decks, crossfader, per-deck EQ/faders, jog control,
    skip/seek, energy slider or tempo controls, and never let UI write to deck automation directly.
@@ -262,7 +264,14 @@ display waits for `engine.displayDelay` (key-lock delay + the output's `outputLa
 Cue / preview: one shared player (`sharedPreview`, `store/preview.ts`) for the track editor, the booth's Cue (loaded
 decks before Play, and the cued deck) and the picker's ▶ (30 s of the hook, else the drop), so only one plays at a
 time. Cue plays from where the deck will start (`cuePlan`, through a dialogue's jump); "Set start here" turns the
-cue playhead into a bar entry (`barAt`). Closing the picker or the editor stops its preview.
+cue playhead into a bar entry (`barAt`). Closing the picker or the editor stops its preview. A deck's cue also
+stops when its mix is about to start, when its song or role changes, and when the set starts (`useSession.play`).
+
+Jog wheel (`JogWheel` with `scrub`, loaded and cued decks until their mix begins): drag round (1 turn = 4 bars,
+Shift = 1 bar), scroll (1 beat a notch) or keys (←/→ beat, Shift bar, PageUp/PageDown 8 bars, Home). It shows
+the start point (platter angle, "Bar 11.2", the overview's ⚑ moves live) and saves it on release / after a
+pause as a beat-snapped fractional bar entry (`beatBar`; `{ kind: "bar", bar: 10.25 }` = bar 11, beat 2) through
+the same `setEntry` / `setPreloadEntry` as Start from; a playing cue jumps there.
 
 Start from: `AutoDJ.setEntry(choice)` re-plans the cued transition (like Drop and requests: only before it is
 under way) and the cued deck's overview shows a ⚑ where it will start.

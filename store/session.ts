@@ -12,6 +12,7 @@ import { rankForRequest, type RequestOption } from "@/lib/dj/selector";
 import { appendSetLog, loadLastSession, saveLastSession } from "@/lib/library/store";
 import type { EntryChoice, MoodId, Track } from "@/lib/types";
 import { readyTracks, useLibrary } from "./library";
+import { usePreview } from "./preview";
 
 interface SessionState {
   status: AutoDJStatus;
@@ -100,6 +101,8 @@ export const useSession = create<SessionState>((set, get) => ({
   async play() {
     if (get().starting || get().stopping || get().status.playing) return;
     set({ starting: true, resumeAvailable: false });
+    // A cue on a loaded deck ends when the set starts (that song is about to play on the club speakers).
+    if (usePreview.getState().playing?.startsWith("cue:")) usePreview.getState().stop();
     try {
       const lib = useLibrary.getState();
       if (lib.folderState === "needs-permission" && !(await lib.reconnect())) {

@@ -1,14 +1,15 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { EQ_KILL_DB } from "@/lib/audio/deck";
 import { SCHEDULE_MARGIN } from "@/lib/dj/autodj";
-import { barAt, entryOptions, type CuePlan } from "@/lib/dj/cues";
+import { barAt, barLabel, beatBar, entryOptions, type CuePlan } from "@/lib/dj/cues";
+import { barSeconds } from "@/lib/dj/mixpoints";
 import { useLibrary } from "@/store/library";
 import { usePreview } from "@/store/preview";
 import type { EntryChoice, Track } from "@/lib/types";
 import { formatTime, setText, useBoothFrame } from "./frame";
-import { JogWheel } from "./JogWheel";
+import { JogWheel, type JogScrub } from "./JogWheel";
 import { DECK_LETTERS } from "./theme";
 import { TrackOverview } from "./TrackOverview";
 
@@ -70,13 +71,23 @@ export function DeckPanel({
   const bass = useRef<HTMLSpanElement>(null);
   const choose = useRef<HTMLButtonElement>(null);
   const startFrom = useRef<HTMLDivElement>(null);
+  // Jog wheel: the start point while it's being turned, and whether this deck's mix has begun.
+  const [scrubbing, setScrubbing] = useState<number | null>(null);
+  const [locked, setLocked] = useState(false);
   const cueHead = useRef<HTMLSpanElement>(null);
   const cueTag = `cue:${deck}`;
+  const lockedRef = useRef(false);
   const cueing = usePreview((s) => s.playing === cueTag);
   const cueLoading = usePreview((s) => s.loading);
   const playPreview = usePreview((s) => s.play);
   const stopPreview = usePreview((s) => s.stop);
   const getFile = useLibrary((s) => s.getFile);
+  // A different song on this deck, or the deck going on air (Play): its cue is over.
+  useEffect(() => {
+    return () => {
+      if (usePreview.getState().playing === cueTag) usePreview.getState().stop();
+    };
+  }, [track?.id, role, cueTag]);
   const a = track?.analysis ?? null;
 
   useBoothFrame((snap) => {
@@ -90,6 +101,12 @@ export function DeckPanel({
     // Once this deck's mix is (about to be) under way, its track can't change.
     // Once this deck's mix is (about to be) under way, its track and start can't change.
     const locked = role === "incoming" && !!snap?.mix && snap.now >= snap.mix.start - SCHEDULE_MARGIN;
+    if (locked !== lockedRef.current) {
+      lockedRef.current = locked;
+      setLocked(locked);
+    }
+    // Its mix is starting: the song is about to be on the club speakers, so its cue stops.
+    if (locked && usePreview.getState().playing === cueTag) usePreview.getState().stop();
     if (choose.current) choose.current.style.display = locked ? "none" : "";
     if (startFrom.current) startFrom.current.style.display = locked ? "none" : "";
     // Cue playhead (the preview player's position, not the deck's).
@@ -108,6 +125,31 @@ export function DeckPanel({
       bass.current.style.opacity = String(0.2 + on * 0.8);
     }
   });
+
+  // On a loaded or cued deck (never on air, nor once its mix has begun) the jog wheel sets the start point.
+  const chosenStart =
+    entry && a ? (entry.choice.kind === "bar" ? a.firstBeat + entry.choice.bar * barSeconds(a) : entry.startAt) : 0;
+  const jog: JogScrub | undefined =
+    entry && track && a && !locked
+      ? {
+          position: chosenStart,
+          duration: a.duration,
+          beat: barSeconds(a) / 4,
+          label: `Start point, Deck ${DECK_LETTERS[deck]}`,
+          valueText: (pos) => barLabel(beatBar(a, pos)),
+          onMove: setScrubbing,
+          onCommit: (pos) => {
+            const bar = beatBar(a, pos);
+            setScrubbing(null);
+            entry.set({ kind: "bar", bar });
+            // A cue that's playing jumps to the new start.
+            if (usePreview.getState().playing === cueTag) {
+              const from = a.firstBeat + bar * barSeconds(a);
+              void playPreview(cueTag, async (p) => p.playFrom(await getFile(track), from, { length: 60 }));
+            }
+          },
+        }
+      : undefined;
 
   const active = role === "live" || role === "incoming" || role === "loaded";
   return (
@@ -142,7 +184,7 @@ export function DeckPanel({
 
       <div className="flex items-stretch gap-4">
         <div className="mx-auto w-full max-w-[15rem] flex-1">
-          <JogWheel deck={deck} track={track} color={color}>
+          <JogWheel deck={deck} track={track} color={color} scrub={jog}>
             <div>
               <span ref={bpm} className="block font-mono text-2xl font-bold tabular-nums">
                 —
@@ -208,7 +250,7 @@ export function DeckPanel({
             })}
             {entry.choice.kind === "bar" && (
               <span className="rounded-full px-3 py-1 text-xs font-semibold" style={{ background: color, color: "#07070b" }}>
-                Bar {entry.choice.bar + 1}
+                {barLabel(entry.choice.bar)}
               </span>
             )}
             {cue && (
@@ -255,7 +297,7 @@ export function DeckPanel({
         track={track}
         color={color}
         live={role === "live"}
-        startAt={entry?.startAt}
+        startAt={scrubbing ?? entry?.startAt}
         onPickBar={entry ? (bar) => entry.set({ kind: "bar", bar }) : undefined}
       />
     </section>

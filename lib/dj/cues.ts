@@ -164,3 +164,15 @@ export function barAt(a: TrackAnalysis, position: number): number {
   return Math.max(0, Math.round((position - a.firstBeat) / barSeconds(a)));
 }
 
+/** A track position snapped to the nearest beat, as a (fractional) bar from the first downbeat: 10.25 = bar 11, beat 2. */
+export function beatBar(a: TrackAnalysis, position: number): number {
+  const beat = barSeconds(a) / 4;
+  return Math.max(0, Math.round((position - a.firstBeat) / beat)) / 4;
+}
+
+/** "Bar 11.2" for a fractional bar (bar 11, beat 2), counting from 1. */
+export function barLabel(bar: number): string {
+  const whole = Math.floor(bar + 1e-9);
+  return `Bar ${whole + 1}.${Math.round((bar - whole) * 4) + 1}`;
+}
+

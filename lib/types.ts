@@ -160,6 +160,7 @@ export type EntryChoice =
   | { kind: "dialogue" }
   | { kind: "hook" }
   | { kind: "drop" }
+  /** From a bar counted from the first downbeat; may be fractional in beats (10.25 = bar 11, beat 2). */
   | { kind: "bar"; bar: number };
 
 /** One track played, for the set log (licence reports). */
