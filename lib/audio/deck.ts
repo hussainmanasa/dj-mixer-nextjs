@@ -7,7 +7,12 @@
 
 import { trimDb } from "@/lib/analysis/loudness";
 import type { Track } from "@/lib/types";
-import { PlaybackTimeline } from "./timeline";
+import { PlaybackTimeline, type Jump } from "./timeline";
+
+/** Overlap (s) of the two sources at a jump, so the cut doesn't click. */
+const JUMP_XFADE = 0.01;
+/** Length (s) of a rewind / spinback. */
+export const REWIND_SECONDS = 0.9;
 
 export const EQ_KILL_DB = -26;
 
@@ -30,6 +35,10 @@ export class Deck {
   private keyLock: AudioWorkletNode | null = null;
 
   private source: AudioBufferSourceNode | null = null;
+  /** Before a scheduled jump: the source playing the part up to the jump (e.g. a dialogue). */
+  private preJump: AudioBufferSourceNode | null = null;
+  /** A scheduled rewind (spinback). */
+  private rewindSrc: AudioBufferSourceNode | null = null;
   track: Track | null = null;
   buffer: AudioBuffer | null = null;
   timeline: PlaybackTimeline | null = null;
@@ -88,37 +97,66 @@ export class Deck {
     this.trim.gain.setValueAtTime(Math.pow(10, trimDb(track.analysis?.loudness, targetLoudness) / 20), this.ctx.currentTime);
   }
 
-  /** Start playback at context time `when` from track position `offset`. */
-  start(when: number, offset: number, rate: number): void {
+  /**
+   * Start playback at context time `when` from track position `offset`. With
+   * a `jump`, playback continues from track position `jump.to` at context time
+   * `jump.at` (a dialogue that cuts straight to the drop) — two sources with a
+   * 10 ms crossfade, both scheduled on the audio clock.
+   */
+  start(when: number, offset: number, rate: number, jump?: Jump): void {
     if (!this.buffer) throw new Error(`Deck ${this.index}: nothing loaded`);
     this.stopNow();
-    const src = new AudioBufferSourceNode(this.ctx, { buffer: this.buffer });
     const at = Math.max(this.ctx.currentTime, when - 0.01);
-    src.playbackRate.setValueAtTime(rate, at);
     const pitch = this.pitch;
     if (pitch) {
       pitch.cancelScheduledValues(this.ctx.currentTime);
       pitch.setValueAtTime(1 / rate, at);
     }
-    src.connect(this.trim);
+
+    const src = new AudioBufferSourceNode(this.ctx, { buffer: this.buffer });
+    src.playbackRate.setValueAtTime(rate, at);
     src.onended = () => {
       if (this.source !== src) return;
       this.source = null;
       if (!this.stopping) this.onUnexpectedEnd?.(this);
     };
-    src.start(when, offset);
+
+    if (jump && jump.at > when) {
+      // Up to the jump: the pre-jump part, faded out across the cut.
+      const pre = new AudioBufferSourceNode(this.ctx, { buffer: this.buffer });
+      pre.playbackRate.setValueAtTime(rate, at);
+      const preGain = new GainNode(this.ctx, { gain: 1 });
+      preGain.gain.setValueAtTime(1, jump.at - JUMP_XFADE / 2);
+      preGain.gain.linearRampToValueAtTime(0, jump.at + JUMP_XFADE / 2);
+      pre.connect(preGain).connect(this.trim);
+      pre.start(when, offset);
+      pre.stop(jump.at + JUMP_XFADE);
+      pre.onended = () => preGain.disconnect();
+      this.preJump = pre;
+      // From the jump: the rest of the track, faded in across the cut.
+      const mainGain = new GainNode(this.ctx, { gain: 0 });
+      mainGain.gain.setValueAtTime(0, jump.at - JUMP_XFADE / 2);
+      mainGain.gain.linearRampToValueAtTime(1, jump.at + JUMP_XFADE / 2);
+      src.connect(mainGain).connect(this.trim);
+      src.start(jump.at - JUMP_XFADE / 2, Math.max(0, jump.to - (JUMP_XFADE / 2) * rate));
+      this.timeline = new PlaybackTimeline(when, offset, rate, null, jump);
+    } else {
+      src.connect(this.trim);
+      src.start(when, offset);
+      this.timeline = new PlaybackTimeline(when, offset, rate);
+    }
     this.source = src;
     this.stopping = false;
-    this.timeline = new PlaybackTimeline(when, offset, rate);
   }
 
   /** Ramp playback rate linearly between two context times (for tempo hand-back). */
   rampRate(t0: number, t1: number, to: number): void {
     if (!this.source || !this.timeline) return;
     const from = this.timeline.rateAt(t0);
-    const p = this.source.playbackRate;
-    p.setValueAtTime(from, t0);
-    p.linearRampToValueAtTime(to, t1);
+    for (const src of [this.source, this.preJump]) {
+      src?.playbackRate.setValueAtTime(from, t0);
+      src?.playbackRate.linearRampToValueAtTime(to, t1);
+    }
     // 1/rate is close enough to linear over ±8% (< 3 cents off mid-ramp).
     this.pitch?.setValueAtTime(1 / from, t0);
     this.pitch?.linearRampToValueAtTime(1 / to, t1);
@@ -128,14 +166,33 @@ export class Deck {
   stopAt(when: number): void {
     if (!this.source) return;
     this.stopping = true;
-    try {
-      this.source.stop(Math.max(when, this.ctx.currentTime));
-    } catch {
-      /* already stopped */
+    for (const src of [this.source, this.preJump]) {
+      try {
+        src?.stop(Math.max(when, this.ctx.currentTime));
+      } catch {
+        /* already stopped */
+      }
     }
   }
 
   stopNow(): void {
+    if (this.rewindSrc) {
+      try {
+        this.rewindSrc.stop();
+      } catch {
+        /* already stopped */
+      }
+      this.rewindSrc = null;
+    }
+    if (this.preJump) {
+      try {
+        this.preJump.stop();
+      } catch {
+        /* already stopped */
+      }
+      this.preJump.disconnect();
+      this.preJump = null;
+    }
     if (this.source) {
       this.stopping = true;
       try {
@@ -147,6 +204,53 @@ export class Deck {
       this.source = null;
     }
     this.timeline = null;
+  }
+
+  /**
+   * Classic DJ rewind from context time `at`: the last few seconds play
+   * backwards, speeding up 1× → 4× and fading out over REWIND_SECONDS. Web
+   * Audio can't run a source backwards reliably, so it plays a reversed copy
+   * of that stretch. It goes in after the fader (the caller cuts the fader at
+   * `at`), so it's heard while the track itself stops.
+   */
+  rewind(at: number, seconds = REWIND_SECONDS): void {
+    const buf = this.buffer;
+    if (!buf || !this.timeline) return;
+    const pos = this.timeline.positionAt(at);
+    // 1× → 4× exponentially over `seconds` covers ~2.2 s of audio; take a little more.
+    const span = Math.min(pos, 3);
+    const n = Math.floor(span * buf.sampleRate);
+    if (n < 64) return;
+    const start = Math.max(0, Math.floor(pos * buf.sampleRate) - n);
+    const rev = new AudioBuffer({ numberOfChannels: buf.numberOfChannels, length: n, sampleRate: buf.sampleRate });
+    for (let c = 0; c < buf.numberOfChannels; c++) {
+      const src = buf.getChannelData(c).subarray(start, start + n);
+      const dst = rev.getChannelData(c);
+      for (let i = 0; i < n; i++) dst[i] = src[n - 1 - i];
+    }
+    const node = new AudioBufferSourceNode(this.ctx, { buffer: rev });
+    node.playbackRate.setValueAtTime(1, at);
+    node.playbackRate.exponentialRampToValueAtTime(4, at + seconds);
+    const gain = new GainNode(this.ctx, { gain: 0 });
+    gain.gain.setValueAtTime(0, at - 0.005);
+    gain.gain.linearRampToValueAtTime(1, at + 0.01);
+    gain.gain.setValueAtTime(1, at + seconds * 0.4);
+    gain.gain.linearRampToValueAtTime(0, at + seconds);
+    node.connect(gain).connect(this.out);
+    node.start(at);
+    node.stop(at + seconds + 0.02);
+    node.onended = () => {
+      gain.disconnect();
+      if (this.rewindSrc === node) this.rewindSrc = null;
+    };
+    this.rewindSrc?.stop();
+    this.rewindSrc = node;
+  }
+
+  /** Context time of a jump that hasn't happened yet (a dialogue still playing), else null. */
+  pendingJump(now = this.ctx.currentTime): number | null {
+    const j = this.timeline?.jump;
+    return j && j.at > now ? j.at : null;
   }
 
   /** Track position at a context time (defaults to now). */

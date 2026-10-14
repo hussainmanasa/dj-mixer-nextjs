@@ -20,6 +20,8 @@ const TRANSITION_LABEL: Record<TransitionKind, string> = {
   echoOut: "Echo-out",
   cut: "Cut on the downbeat",
   drop: "Drop",
+  dialogue: "Dialogue → drop",
+  rewind: "Rewind",
 };
 
 function deckRole(status: AutoDJStatus, deck: number): { role: DeckRole; track: Track | null } {
@@ -51,6 +53,7 @@ export function Booth() {
   const play = useSession((s) => s.play);
   const stop = useSession((s) => s.stop);
   const setMood = useSession((s) => s.setMood);
+  const setEntry = useSession((s) => s.setEntry);
 
   const canPlay = hydrated && ready >= 2;
   const tryAutoResume = useSession((s) => s.tryAutoResume);
@@ -77,7 +80,16 @@ export function Booth() {
           ? { label: "Queue track", open: () => setPicker({ next: false }) }
           : { label: track ? "Change track" : "Choose track", open: () => setPicker({ next: true }) };
     return (
-      <DeckPanel key={i} deck={i} role={role} track={track} color={color} onChoose={choose} keyLock={status.playing && status.keyLock} />
+      <DeckPanel
+        key={i}
+        deck={i}
+        role={role}
+        track={track}
+        color={color}
+        onChoose={choose}
+        keyLock={status.playing && status.keyLock}
+        entry={role === "incoming" && status.next && !stopping ? { choice: status.next.entry, startAt: status.next.startAt, set: setEntry } : undefined}
+      />
     );
   });
 
@@ -125,7 +137,7 @@ export function Booth() {
         <h2 id="mood-heading" className="mb-3 text-sm font-medium uppercase tracking-wider text-muted">
           Mood
         </h2>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
           {moods.map((m) => {
             const active = status.mood === m.id;
             const c = MOOD_COLOR[m.id];
@@ -278,14 +290,17 @@ function DropButton({ status, live, color }: { status: AutoDJStatus; live: boole
   const label = useRef<HTMLSpanElement>(null);
   // React state, not a DOM write: React skips onClick when the *prop* says disabled.
   const [busy, setBusy] = useState(false);
-  const dropping = status.next?.transition === "drop";
+  // A Drop (or drop swap) is armed — not a Desi Night song that's waiting for one.
+  const dropping = (status.next?.transition === "drop" || status.next?.transition === "dialogue") && !status.next.holding;
   useBoothFrame((snap) => {
     const mix = snap?.mix;
-    const nowBusy = !!mix && snap.now >= mix.start - SCHEDULE_MARGIN;
+    // Busy while a mix is under way, or while the live song is still in its dialogue.
+    const nowBusy = (!!mix && snap.now >= mix.start - SCHEDULE_MARGIN) || !!snap?.dropLocked;
     if (nowBusy !== busy) setBusy(nowBusy);
     const hits = mix ? (mix.drop ?? mix.start) : 0;
     let text = "Drop";
     if (dropping && mix && snap.now < hits) text = `Drop in ${formatTime(hits - snap.now)}`;
+    else if (snap?.dropLocked) text = "Dialogue…";
     else if (nowBusy) text = "Mixing…";
     setText(label.current, text);
   });
@@ -363,7 +378,9 @@ function NextMix({ status, color }: { status: AutoDJStatus; color: string }) {
     const mix = snap?.mix;
     if (!mix) return;
     if (snap.now < mix.start) {
-      setText(when.current, `in ${formatTime(mix.start - snap.now)}`);
+      // Desi Night: the song waits for Drop and only mixes by itself near its end.
+      const left = formatTime(mix.start - snap.now);
+      setText(when.current, status.next?.holding ? `waits for Drop · auto in ${left}` : `in ${left}`);
       if (progress.current) progress.current.style.transform = "scaleX(0)";
     } else {
       const p = Math.min(1, (snap.now - mix.start) / Math.max(0.1, mix.end - mix.start));

@@ -7,6 +7,11 @@ const nextConfig: NextConfig = {
     // Retry navigations once the connection returns; powers the offline banner (useOffline).
     useOffline: true,
   },
+  // The booth is the app: send "/" there before any page renders. (A page that only calls
+  // redirect() has nothing for instant-navigation validation to render, and errors in dev.)
+  async redirects() {
+    return [{ source: "/", destination: "/booth", permanent: false }];
+  },
   async headers() {
     return [
       {

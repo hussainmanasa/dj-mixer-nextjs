@@ -1,7 +1,7 @@
 // Shared domain types for the auto-DJ. Keep this file free of browser APIs so
 // it can be imported from server components, workers and tests alike.
 
-export type MoodId = "chill" | "warmup" | "groove" | "peak" | "afterhours";
+export type MoodId = "chill" | "warmup" | "groove" | "peak" | "afterhours" | "desi";
 
 export interface Mood {
   id: MoodId;
@@ -26,6 +26,23 @@ export interface Mood {
    * its drop exactly where the current one breaks down (a drop swap).
    */
   dropSwap: boolean;
+  /**
+   * Open the set (only when it starts in this mood) with a slow song from these
+   * crates, played from its hook; when the hook ends, drop into the party.
+   */
+  opener?: { crates: string[]; maxBpm: number };
+  /**
+   * After the opener, keep each song playing until staff press Drop. It still
+   * mixes out near its end if nobody does — the music never stops.
+   */
+  holdForDrop?: boolean;
+  /**
+   * Beat-match at half and double tempo too (a 64 BPM ballad against a 128 BPM
+   * party track: one ballad beat per two party beats). Common in Bollywood sets.
+   */
+  halfTime?: boolean;
+  /** On a big tempo jump, rewind (spin back) the outgoing song instead of echoing it out. */
+  rewind?: boolean;
 }
 
 /** Result of offline audio analysis (lib/analysis). Times are track seconds. */
@@ -57,6 +74,17 @@ export interface TrackAnalysis {
   keyConfidence?: number;
   /** Per-track drop-detection threshold from the admin (TrackOverrides.fullLevel). */
   fullLevel?: number;
+  /** Markers the analysis suggests (version 4+). Never used until the admin accepts them. */
+  suggestedHook?: SuggestedRange | null;
+  suggestedDialogue?: SuggestedRange | null;
+}
+
+/** A marker suggested by the analysis, in track seconds; the admin accepts it in the track editor. */
+export interface SuggestedRange {
+  start: number;
+  end: number;
+  /** 0..1, how clearly it stood out. */
+  confidence: number;
 }
 
 /** Admin fixes for one track; they survive re-analysis. */
@@ -96,13 +124,40 @@ export interface Track {
   flag?: TrackFlag;
   /** Admin groupings (e.g. "Bollywood", "Friday"); moods can be limited to crates. */
   crates?: string[];
+  /** Song markers set by the admin (dialogue, hook, default start). */
+  cues?: TrackCues;
   status: TrackStatus;
   error?: string;
   addedAt: number;
 }
 
-/** `drop`: staff pressed Drop — the next track comes in on its drop (see AutoDJ.drop). */
-export type TransitionKind = "blend" | "filterSweep" | "echoOut" | "cut" | "drop";
+/**
+ * `drop`: the next track comes in on its drop (staff Drop, drop swaps).
+ * `dialogue`: the next track's dialogue plays, then it jumps straight to its drop.
+ * `rewind`: the outgoing track spins back, then the next one hits (big tempo jumps).
+ */
+export type TransitionKind = "blend" | "filterSweep" | "echoOut" | "cut" | "drop" | "dialogue" | "rewind";
+
+/** Song markers, in track seconds. Set by the admin in the track editor; they survive re-analysis. */
+export interface TrackCues {
+  /** Where the song starts when nothing else applies (on a downbeat). */
+  start?: number;
+  /** The hook / chorus (mukhda), on downbeats. */
+  hookStart?: number;
+  hookEnd?: number;
+  /** A dialogue in the track (exact times — speech isn't on the beat). The drop follows it. */
+  dialogueStart?: number;
+  dialogueEnd?: number;
+}
+
+/** Where staff want the cued song to come in from (booth "Start from"). */
+export type EntryChoice =
+  | { kind: "auto" }
+  | { kind: "beginning" }
+  | { kind: "dialogue" }
+  | { kind: "hook" }
+  | { kind: "drop" }
+  | { kind: "bar"; bar: number };
 
 /** One track played, for the set log (licence reports). */
 export interface SetLogEntry {

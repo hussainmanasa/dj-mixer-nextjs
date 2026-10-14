@@ -12,10 +12,11 @@
 import type { TrackAnalysis } from "@/lib/types";
 import { detectKey } from "./keydetect";
 import { integratedLoudness } from "./loudness";
+import { barChroma, suggestDialogue, suggestHook } from "./suggest";
 
 export const ANALYSIS_SAMPLE_RATE = 11025;
 /** Bump when TrackAnalysis gains fields; older results are re-analysed in the background. */
-export const ANALYSIS_VERSION = 3;
+export const ANALYSIS_VERSION = 4;
 
 /** A beat grid confirmed by the admin: skips tempo detection. */
 export interface ForcedGrid {
@@ -345,6 +346,13 @@ export function analyzeSamples(
 
   const key = detectKey(samples, sampleRate);
 
+  // Suggested markers for the admin (songs long enough to have a chorus).
+  const grid = { bpm: refined.bpm, firstBeat };
+  const rmsRef = [...barRms].sort((x, y) => x - y)[Math.floor(barRms.length * 0.9)] || 1;
+  const suggestedHook =
+    duration >= 45 ? suggestHook(barChroma(samples, sampleRate, grid, barRms.length), barRms.map((v) => Math.min(1, v / rmsRef)), grid) : null;
+  const suggestedDialogue = suggestDialogue(samples, sampleRate, grid);
+
   return {
     bpm: refined.bpm,
     firstBeat: Math.round(firstBeat * 1000) / 1000,
@@ -358,6 +366,8 @@ export function analyzeSamples(
     loudness: integratedLoudness(samples, sampleRate),
     detectedKey: key?.camelot ?? null,
     keyConfidence: key?.confidence ?? 0,
+    suggestedHook,
+    suggestedDialogue,
   };
 }
 

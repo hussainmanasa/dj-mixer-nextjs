@@ -1,0 +1,90 @@
+// Song markers (dialogue, hook, default start) and where a song comes in. PURE.
+
+import type { EntryChoice, Track, TrackAnalysis, TrackCues } from "@/lib/types";
+import { barSeconds, cueIn, dropCue } from "./mixpoints";
+
+/** An opener with no hook marker plays this many bars from its start before the auto-drop. */
+export const OPENER_BARS = 32;
+
+/** How a song comes in on a drop-style transition. Positions are track seconds. */
+export interface Entry {
+  /** The position that lands on the transition's landing point (its drop, hook or a chosen bar). */
+  land: number;
+  /** Play this dialogue first; when it ends the deck jumps to `land`. */
+  dialogue?: { start: number; end: number };
+}
+
+/** The dialogue marker, if it is complete and sensible. */
+export function dialogueOf(cues: TrackCues | undefined): { start: number; end: number } | undefined {
+  if (cues?.dialogueStart === undefined || cues.dialogueEnd === undefined) return undefined;
+  return cues.dialogueEnd > cues.dialogueStart ? { start: cues.dialogueStart, end: cues.dialogueEnd } : undefined;
+}
+
+/** The hook marker, if complete. */
+export function hookOf(cues: TrackCues | undefined): { start: number; end: number } | undefined {
+  if (cues?.hookStart === undefined || cues.hookEnd === undefined) return undefined;
+  return cues.hookEnd > cues.hookStart ? { start: cues.hookStart, end: cues.hookEnd } : undefined;
+}
+
+/** Where a song starts by default: its start marker, else its first downbeat. */
+export function defaultStart(track: Track): number {
+  return track.cues?.start ?? cueIn(track.analysis!);
+}
+
+/** Nearest downbeat to a track position (markers that must sit on the grid). */
+export function snapToBar(a: TrackAnalysis, position: number): number {
+  const bar = barSeconds(a);
+  return Math.max(0, a.firstBeat + Math.round((position - a.firstBeat) / bar) * bar);
+}
+
+/**
+ * How a song comes in, from staff's "Start from" choice. `auto` plays its
+ * dialogue (if marked) and then drops; otherwise it lands on its drop.
+ */
+export function resolveEntry(track: Track, choice: EntryChoice = { kind: "auto" }): Entry {
+  const a = track.analysis!;
+  const dialogue = dialogueOf(track.cues);
+  switch (choice.kind) {
+    case "beginning":
+      return { land: cueIn(a) };
+    case "hook":
+      return { land: hookOf(track.cues)?.start ?? dropCue(a) };
+    case "drop":
+      return { land: dropCue(a) };
+    case "bar":
+      return { land: Math.min(a.duration - barSeconds(a), Math.max(0, a.firstBeat + choice.bar * barSeconds(a))) };
+    default:
+      return dialogue ? { land: dropCue(a), dialogue } : { land: dropCue(a) };
+  }
+}
+
+/** Which "Start from" choices make sense for a song (dialogue / hook only when marked). */
+export function entryOptions(track: Track): EntryChoice["kind"][] {
+  const options: EntryChoice["kind"][] = ["auto", "beginning"];
+  if (dialogueOf(track.cues)) options.push("dialogue");
+  if (hookOf(track.cues)) options.push("hook");
+  options.push("drop");
+  return options;
+}
+
+/** The part of an opener that plays before the auto-drop: its hook, else OPENER_BARS from its start. */
+export function openerWindow(track: Track): { start: number; end: number } {
+  const a = track.analysis!;
+  const hook = hookOf(track.cues);
+  if (hook) return hook;
+  const start = defaultStart(track);
+  return { start, end: Math.min(a.duration - 2 * barSeconds(a), start + OPENER_BARS * barSeconds(a)) };
+}
+
+/** Problems with a set of markers, as messages for the editor (empty = fine). */
+export function validateCues(c: TrackCues, duration: number): string[] {
+  const errors: string[] = [];
+  const inside = (v: number | undefined) => v === undefined || (v >= 0 && v <= duration);
+  if (![c.start, c.hookStart, c.hookEnd, c.dialogueStart, c.dialogueEnd].every(inside)) errors.push("Markers must be inside the song.");
+  if (c.hookStart !== undefined && c.hookEnd !== undefined && c.hookEnd <= c.hookStart) errors.push("The hook must end after it starts.");
+  if (c.dialogueStart !== undefined && c.dialogueEnd !== undefined && c.dialogueEnd <= c.dialogueStart)
+    errors.push("The dialogue must end after it starts.");
+  if ((c.hookStart === undefined) !== (c.hookEnd === undefined)) errors.push("Mark both the start and the end of the hook.");
+  if ((c.dialogueStart === undefined) !== (c.dialogueEnd === undefined)) errors.push("Mark both the start and the end of the dialogue.");
+  return errors;
+}

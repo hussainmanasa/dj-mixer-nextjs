@@ -13,6 +13,7 @@
 # testing
 /coverage
 /e2e/.fixtures
+/e2e/.fixtures-desi
 /test-results
 /playwright-report
 

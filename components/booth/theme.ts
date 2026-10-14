@@ -7,6 +7,7 @@ export const MOOD_COLOR: Record<MoodId, string> = {
   groove: "#34d399",
   peak: "#f472b6",
   afterhours: "#a78bfa",
+  desi: "#fb923c",
 };
 
 export const DECK_LETTERS = ["A", "B", "C", "D"] as const;

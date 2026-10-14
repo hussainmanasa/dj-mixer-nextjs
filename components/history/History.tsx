@@ -15,6 +15,8 @@ const HOW_LABEL: Record<SetLogEntry["how"], string> = {
   echoOut: "Echo-out",
   cut: "Cut",
   drop: "Drop swap",
+  dialogue: "Dialogue → drop",
+  rewind: "Rewind",
 };
 
 function duration(sec: number): string {

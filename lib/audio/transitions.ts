@@ -4,7 +4,7 @@
 // is over, so the caller can hand over control.
 
 import type { TransitionKind } from "@/lib/types";
-import { Deck, EQ_KILL_DB } from "./deck";
+import { Deck, EQ_KILL_DB, REWIND_SECONDS } from "./deck";
 
 export interface TransitionPlan {
   kind: TransitionKind;
@@ -148,6 +148,50 @@ export function dropIn(out: Deck, inc: Deck, start: number, t: number, outBeatSe
 
   // Faded: hand over once the outgoing deck is silent. Cut: after one bar, once the echo tail is in the delay line.
   return { kind: "drop", start, end: build ? fadeEnd : t + 4 * outBeatSec, drop: t };
+}
+
+/**
+ * Dialogue → drop (Desi Night, or a Drop onto a song with a marked dialogue):
+ * the outgoing track's last beat goes into the echo and it cuts out at `t`,
+ * when the incoming deck starts its dialogue — clear, at full level, with the
+ * echo tail fading underneath. The incoming deck itself jumps from the end of
+ * the dialogue to its drop (`Deck.start` with a jump at `drop`).
+ */
+export function dialogueIn(out: Deck, inc: Deck, t: number, drop: number, outBeatSec: number): TransitionPlan {
+  out.echoDelay.delayTime.setValueAtTime(Math.min(4, outBeatSec * 0.75), t - outBeatSec);
+  out.echoSend.gain.setValueAtTime(0, t - outBeatSec);
+  // Quieter than an echo-out's throw, so the tail sits under the words.
+  out.echoSend.gain.linearRampToValueAtTime(0.4, t - 0.01);
+  out.echoSend.gain.linearRampToValueAtTime(0, t + 0.02);
+  out.fader.gain.setValueAtTime(1, t - 0.01);
+  out.fader.gain.linearRampToValueAtTime(0, t + 0.02);
+
+  inc.resetControls(0);
+  inc.fader.gain.setValueAtTime(0, t - 0.01);
+  inc.fader.gain.linearRampToValueAtTime(1, t + 0.02);
+
+  // Hand over once the outgoing deck is out (the incoming deck jumps by itself).
+  return { kind: "dialogue", start: t, end: t + 4 * outBeatSec, drop };
+}
+
+/** Seconds a rewind takes before the next track (or its dialogue) comes in. */
+export const REWIND_LEAD = REWIND_SECONDS;
+
+/**
+ * Rewind (spinback) for big tempo jumps in moods with `rewind`: at `t` the
+ * outgoing track is cut and spins back (`Deck.rewind`); REWIND_LEAD later the
+ * incoming deck comes in at full level — on its drop, or on a dialogue that
+ * then drops (`kind` "dialogue", `drop` when it lands).
+ */
+export function rewindInto(out: Deck, inc: Deck, t: number, kind: "rewind" | "dialogue" = "rewind", drop?: number): TransitionPlan {
+  out.fader.gain.setValueAtTime(1, t - 0.01);
+  out.fader.gain.linearRampToValueAtTime(0, t + 0.02);
+  out.rewind(t);
+  const start = t + REWIND_LEAD;
+  inc.resetControls(0);
+  inc.fader.gain.setValueAtTime(0, start - 0.01);
+  inc.fader.gain.linearRampToValueAtTime(1, start + 0.01);
+  return { kind, start, end: start + 0.1, drop: drop ?? start };
 }
 
 /** Hard cut on a downbeat — the fallback when a beat grid can't be trusted. */

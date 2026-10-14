@@ -120,6 +120,81 @@ function MoodCard({ mood, edited, crates }: { mood: Mood; edited: boolean; crate
         </span>
       </label>
 
+      <div className="flex flex-col gap-3 rounded-xl border border-border p-3 text-sm">
+        <label className="flex cursor-pointer items-start gap-3">
+          <input
+            type="checkbox"
+            checked={!!draft.opener}
+            onChange={(e) => set("opener", e.target.checked ? { crates: ["Romantic"], maxBpm: 105 } : undefined)}
+            className="mt-0.5 h-5 w-5 accent-accent"
+          />
+          <span>
+            Open the set with a slow song&apos;s hook
+            <span className="block text-muted">
+              Only when a set starts in this mood: a slow song plays its hook (marked in the Library), then drops into the party.
+            </span>
+          </span>
+        </label>
+        {draft.opener && (
+          <div className="ml-8 flex flex-col gap-2">
+            <label className={row}>
+              <span className="text-muted">Opener at most</span>
+              <input
+                type="number"
+                className={num}
+                value={draft.opener.maxBpm}
+                onChange={(e) => set("opener", { ...draft.opener!, maxBpm: Number(e.target.value) })}
+                aria-label="Opener top BPM"
+              />
+              <span className="text-muted">BPM, from crates</span>
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {[...new Set([...crates, ...draft.opener.crates])].sort().map((c) => {
+                const on = draft.opener!.crates.includes(c);
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    aria-pressed={on}
+                    aria-label={`Opener crate ${c}`}
+                    onClick={() =>
+                      set("opener", { ...draft.opener!, crates: on ? draft.opener!.crates.filter((x) => x !== c) : [...draft.opener!.crates, c] })
+                    }
+                    className={`rounded-full border px-3 py-1 ${on ? "border-accent bg-accent/20" : "border-border bg-surface-2 text-muted"}`}
+                  >
+                    {c}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        <label className="flex cursor-pointer items-start gap-3">
+          <input type="checkbox" checked={!!draft.holdForDrop} onChange={(e) => set("holdForDrop", e.target.checked || undefined)} className="mt-0.5 h-5 w-5 accent-accent" />
+          <span>
+            Hold each song until Drop
+            <span className="block text-muted">
+              Songs play on until staff press Drop (a marked dialogue plays first, then the drop). If nobody does, they mix out near
+              their end.
+            </span>
+          </span>
+        </label>
+        <label className="flex cursor-pointer items-start gap-3">
+          <input type="checkbox" checked={!!draft.halfTime} onChange={(e) => set("halfTime", e.target.checked || undefined)} className="mt-0.5 h-5 w-5 accent-accent" />
+          <span>
+            Match half and double tempo
+            <span className="block text-muted">A 64 BPM song can be beat-matched with a 128 BPM one (one beat per two). Common for Bollywood.</span>
+          </span>
+        </label>
+        <label className="flex cursor-pointer items-start gap-3">
+          <input type="checkbox" checked={!!draft.rewind} onChange={(e) => set("rewind", e.target.checked || undefined)} className="mt-0.5 h-5 w-5 accent-accent" />
+          <span>
+            Rewind on big tempo jumps
+            <span className="block text-muted">When two songs can&apos;t be beat-matched, spin the old one back before the next one hits, instead of an echo-out.</span>
+          </span>
+        </label>
+      </div>
+
       <div className="text-sm">
         <span className="text-muted">Play only from crates</span>
         {crates.length === 0 ? (

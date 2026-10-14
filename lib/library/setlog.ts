@@ -61,6 +61,8 @@ const HOW: Record<SetLogEntry["how"], string> = {
   echoOut: "Echo-out",
   cut: "Cut",
   drop: "Drop swap",
+  dialogue: "Dialogue then drop",
+  rewind: "Rewind",
 };
 
 /** CSV with a header row, one line per track played. */

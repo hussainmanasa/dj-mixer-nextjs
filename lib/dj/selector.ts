@@ -56,12 +56,31 @@ function clamp01(x: number): number {
 }
 
 /**
- * Tempo difference as a fraction of `fromBpm`. Half/double-time matches are
- * deliberately not treated as close: the engine syncs by playbackRate, which
- * can only bridge about ±8%.
+ * Tempo difference as a fraction of `fromBpm`. The engine syncs by
+ * playbackRate, which can only bridge about ±8%.
  */
 export function tempoDelta(fromBpm: number, toBpm: number): number {
   return Math.abs(toBpm - fromBpm) / fromBpm;
+}
+
+/** Tempo multipliers the auto-DJ can beat-match at: 1, plus ×2 and ×½ for moods with `halfTime`. */
+export function tempoRatios(halfTime = false): number[] {
+  return halfTime ? [1, 2, 0.5] : [1];
+}
+
+/**
+ * The multiplier `m` (outgoing tempo ≈ m × incoming tempo) that brings
+ * `toBpm` within MAX_SYNC_DELTA of `fromBpm` — preferring 1 — or null if none
+ * does. With m = 2 each incoming beat spans two outgoing beats.
+ */
+export function syncRatio(fromBpm: number, toBpm: number, halfTime = false): number | null {
+  for (const m of tempoRatios(halfTime)) if (Math.abs(fromBpm / (toBpm * m) - 1) <= MAX_SYNC_DELTA) return m;
+  return null;
+}
+
+/** Smallest tempo difference over the allowed multipliers, as a fraction. */
+export function tempoDistance(fromBpm: number, toBpm: number, halfTime = false): number {
+  return Math.min(...tempoRatios(halfTime).map((m) => tempoDelta(fromBpm, toBpm * m)));
 }
 
 function bandFit(value: number, [lo, hi]: [number, number], falloff: number): number {
@@ -73,7 +92,7 @@ function bandFit(value: number, [lo, hi]: [number, number], falloff: number): nu
 export function moodFit(track: Track, mood: Mood): number {
   const a = track.analysis;
   if (!a) return 0;
-  const bpmFit = bandFit(a.bpm, mood.bpm, 10);
+  const bpmFit = Math.max(...tempoRatios(mood.halfTime).map((m) => bandFit(a.bpm * m, mood.bpm, 10)));
   const genres = track.genres.map((g) => g.toLowerCase());
   const genreFit =
     genres.length === 0 ? 0.5 : genres.some((g) => mood.genres.some((m) => g.includes(m))) ? 1 : 0.2;
@@ -86,7 +105,7 @@ export function scoreTrack(track: Track, ctx: SelectionContext): ScoreBreakdown 
 
   const moodMid = (ctx.mood.bpm[0] + ctx.mood.bpm[1]) / 2;
   const refBpm = ctx.jump || ctx.currentBpm === null ? moodMid : ctx.currentBpm;
-  const tempo = clamp01(1 - tempoDelta(refBpm, a.bpm) / MAX_SYNC_DELTA);
+  const tempo = clamp01(1 - tempoDistance(refBpm, a.bpm, ctx.mood.halfTime) / MAX_SYNC_DELTA);
   const key = keyCompatibility(ctx.current?.camelot ?? null, track.camelot);
   const energy = clamp01(1 - Math.abs(a.energy - ctx.targetEnergy) * 2);
   const mood = moodFit(track, ctx.mood);
@@ -170,9 +189,28 @@ export function rankForRequest(tracks: Track[], ctx: SelectionContext): RequestO
       score: scoreTrack(track, ctx).total,
       moodFit: moodFit(track, ctx.mood),
       recent: recent.has(track.id),
-      syncable: ctx.currentBpm === null || tempoDelta(ctx.currentBpm, track.analysis!.bpm) <= MAX_SYNC_DELTA,
+      syncable: ctx.currentBpm === null || syncRatio(ctx.currentBpm, track.analysis!.bpm, ctx.mood.halfTime) !== null,
     }))
     .sort((x, y) => Number(x.recent) - Number(y.recent) || y.score - x.score);
+}
+
+/**
+ * The set opener for a mood with `opener`: a slow song from the opener crates
+ * (at most `maxBpm`), preferring songs with a hook marker. Falls back to any
+ * song in those crates, then to the slowest songs in the library. `random`
+ * picks among equally good candidates so sets don't always open the same way.
+ */
+export function pickOpener(tracks: Track[], mood: Mood, random: () => number = Math.random): Track | null {
+  const o = mood.opener;
+  if (!o) return null;
+  const pool = tracks.filter(playable);
+  const inCrates = pool.filter((t) => t.crates?.some((c) => o.crates.includes(c)));
+  const slow = (list: Track[]) => list.filter((t) => t.analysis!.bpm <= o.maxBpm);
+  const slowest = [...pool].sort((x, y) => x.analysis!.bpm - y.analysis!.bpm).slice(0, 5);
+  const candidates = [slow(inCrates), inCrates, slow(pool), slowest].find((l) => l.length > 0) ?? [];
+  const withHook = candidates.filter((t) => t.cues?.hookStart !== undefined && t.cues.hookEnd !== undefined);
+  const best = withHook.length > 0 ? withHook : candidates;
+  return best.length ? best[Math.floor(random() * best.length) % best.length] : null;
 }
 
 /** Pick the transition recipe between the playing track and the incoming one. */
@@ -181,12 +219,13 @@ export function chooseTransition(
   next: Track,
   currentBpm: number,
   jump: boolean,
+  halfTime = false,
 ): TransitionKind {
   const a = current.analysis;
   const b = next.analysis;
   if (!a || !b) return "cut";
   if (a.beatConfidence < MIN_BLEND_CONFIDENCE || b.beatConfidence < MIN_BLEND_CONFIDENCE) return "cut";
-  if (jump || Math.abs(currentBpm / b.bpm - 1) > MAX_SYNC_DELTA) return "echoOut";
+  if (jump || syncRatio(currentBpm, b.bpm, halfTime) === null) return "echoOut";
   if (keyCompatibility(current.camelot, next.camelot) < 0.5) return "filterSweep";
   return "blend";
 }
@@ -195,7 +234,11 @@ export function chooseTransition(
 export function isMoodJump(currentBpm: number | null, mood: Mood): boolean {
   if (currentBpm === null) return false;
   const [lo, hi] = mood.bpm;
-  if (currentBpm >= lo && currentBpm <= hi) return false;
-  const edge = currentBpm < lo ? lo : hi;
-  return Math.abs(edge - currentBpm) / currentBpm > MAX_SYNC_DELTA;
+  // With half/double time, the current tempo ×2 or ×½ may already sit in the band.
+  return tempoRatios(mood.halfTime).every((m) => {
+    const bpm = currentBpm * m;
+    if (bpm >= lo && bpm <= hi) return false;
+    const edge = bpm < lo ? lo : hi;
+    return Math.abs(edge - bpm) / bpm > MAX_SYNC_DELTA;
+  });
 }
