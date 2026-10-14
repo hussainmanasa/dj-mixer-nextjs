@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { canPickFolders } from "@/lib/library/scan";
 import { MAX_DECKS, MIN_DECKS } from "@/lib/types";
 import { useLibrary } from "@/store/library";
+import { AudioOutputs } from "./AudioOutputs";
 import { TrackTable } from "./TrackTable";
 
 const DECK_HELP: Record<number, string> = {
@@ -148,6 +149,8 @@ export function LibraryManager() {
           <p className="mt-1 text-xs text-muted">Takes effect the next time Play is pressed.</p>
         </div>
       </section>
+
+      <AudioOutputs />
 
       <TrackTable />
     </main>

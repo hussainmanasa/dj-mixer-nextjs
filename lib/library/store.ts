@@ -23,6 +23,10 @@ export interface Settings {
   keyLock: boolean;
   /** Admin edits to the mood presets. */
   moods: MoodOverrides;
+  /** Output for the mix: the club speakers (PA), e.g. Bluetooth or the 3.5 mm jack. "" = system default. */
+  mainOutput: string;
+  /** Output for previews and Cue (headphones), e.g. USB-C or HDMI. null = not chosen (previews use the default). */
+  previewOutput: string | null;
 }
 
 export interface LastSession {
@@ -33,7 +37,7 @@ export interface LastSession {
   updatedAt: number;
 }
 
-export const DEFAULT_SETTINGS: Settings = { deckCount: 2, keyLock: false, moods: {} };
+export const DEFAULT_SETTINGS: Settings = { deckCount: 2, keyLock: false, moods: {}, mainOutput: "", previewOutput: null };
 
 export async function loadFolderHandle(): Promise<FileSystemDirectoryHandle | undefined> {
   return db ? get<FileSystemDirectoryHandle>(KEYS.folder, db) : undefined;

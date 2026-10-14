@@ -22,18 +22,18 @@ test("decks loaded before Play: Deck A starts from its chosen point, Deck B come
   // Load Deck A with C (start from its drop) and Deck B with A.
   await deck(page, "A").getByRole("button", { name: "Load track" }).click();
   await expect(page.getByRole("dialog")).toContainText("Load a track into Deck A");
-  await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove C" }).getByRole("button").click();
+  await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove C" }).getByRole("button").last().click();
   await expect(deck(page, "A")).toContainText("Loaded");
   await expect(deck(page, "A")).toContainText("Test Groove C");
   await deck(page, "A").getByRole("radio", { name: "Drop" }).click();
   await deck(page, "B").getByRole("button", { name: "Load track" }).click();
-  await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove A" }).getByRole("button").click();
+  await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove A" }).getByRole("button").last().click();
   await expect(deck(page, "B")).toContainText("Test Groove A");
   // Eject and reload works.
   await deck(page, "B").getByRole("button", { name: "Eject Deck B" }).click();
   await expect(deck(page, "B")).toContainText("Empty");
   await deck(page, "B").getByRole("button", { name: "Load track" }).click();
-  await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove A" }).getByRole("button").click();
+  await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove A" }).getByRole("button").last().click();
   await page.screenshot({ path: "test-results/preload.png" });
 
   await page.locator("button[aria-busy]").click();

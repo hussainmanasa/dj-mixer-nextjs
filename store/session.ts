@@ -31,6 +31,8 @@ interface SessionState {
   drop: () => void;
   /** Booth "Start from": where the cued song comes in. */
   setEntry: (choice: EntryChoice) => void;
+  /** Move the playing mix to the chosen club-speaker output (after it changes on the Library page). */
+  applyOutput: () => Promise<void>;
   /** Layer: the cued song (or `trackId`) plays over the current one until Drop swaps them. */
   layer: (trackId?: string) => void;
   /** Songs loaded into decks before Play (index = deck). Deck A plays first, the others next in order. */
@@ -136,6 +138,8 @@ export const useSession = create<SessionState>((set, get) => ({
           }),
       }, keyLock);
       dj.setMood(get().status.mood);
+      // The mix goes to the club speakers chosen on the Library page.
+      await dj.engine.setOutput(lib.settings.mainOutput);
       // Requests made before the first Play.
       for (const t of get().status.queue) dj.request(t, false);
       // Decks loaded before Play: Deck A first, then the others in deck order.
@@ -187,6 +191,10 @@ export const useSession = create<SessionState>((set, get) => ({
 
   setEntry(choice) {
     dj?.setEntry(choice);
+  },
+
+  async applyOutput() {
+    if (dj) await dj.engine.setOutput(useLibrary.getState().settings.mainOutput);
   },
 
   layer(trackId) {

@@ -21,9 +21,9 @@ test("Layer: the next song plays over this one until Drop swaps them; only match
   await page.click("nav >> text=Booth");
   await page.getByRole("button", { name: /^Groove/ }).click();
   await deck(page, "A").getByRole("button", { name: "Load track" }).click();
-  await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove A" }).getByRole("button").click();
+  await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove A" }).getByRole("button").last().click();
   await deck(page, "B").getByRole("button", { name: "Load track" }).click();
-  await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove C" }).getByRole("button").click();
+  await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove C" }).getByRole("button").last().click();
   await page.locator("button[aria-busy]").click();
   await expect.poll(async () => (await deckStates(page)).join(" "), { timeout: 30_000 }).toMatch(/B:Cued .*Test Groove C/);
 

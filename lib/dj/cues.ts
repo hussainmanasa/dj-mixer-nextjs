@@ -139,3 +139,28 @@ export function layerEntry(track: Track, choice: EntryChoice = { kind: "auto" })
   if (choice.kind === "beginning" || choice.kind === "drop" || choice.kind === "bar") return resolveEntry(track, choice).land;
   return hookOf(track.cues)?.start ?? dropCue(track.analysis!);
 }
+
+/** What Cue plays for a deck: from where it will start, through its dialogue's jump to the drop if any. */
+export interface CuePlan {
+  from: number;
+  jump?: { at: number; to: number };
+}
+
+/**
+ * Cue for a loaded or cued deck: from its start point — Deck A's first start
+ * (`first`, with `opener` for opener moods) or how a later deck comes in.
+ */
+export function cuePlan(track: Track, choice: EntryChoice, first: boolean, opener = false): CuePlan {
+  if (first) {
+    const fs = firstStart(track, choice, opener);
+    return fs.jump ? { from: fs.start, jump: { at: fs.start + fs.jump.after, to: fs.jump.to } } : { from: fs.start };
+  }
+  const e = resolveEntry(track, choice);
+  return e.dialogue ? { from: e.dialogue.start, jump: { at: e.dialogue.end, to: e.land } } : { from: e.land };
+}
+
+/** The bar (from the first downbeat) nearest a track position — for "Set start here". */
+export function barAt(a: TrackAnalysis, position: number): number {
+  return Math.max(0, Math.round((position - a.firstBeat) / barSeconds(a)));
+}
+

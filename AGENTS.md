@@ -25,7 +25,9 @@ Full product plan: https://claude.ai/code/artifact/903692c7-9f12-49a9-9de1-5a82b
    Riser on the master FX chain), **track requests** (choose the cued deck's track, or queue tracks), from
    14 Oct 2026 **Start from** on the cued deck (Auto / Beginning / Dialogue / Hook / Drop, or tap a bar),
    **loading songs into decks before Play** (each with its Start from; the auto-DJ takes over after them), and
-   **Layer** (two songs together until Drop swaps them; only songs that match in tempo and key).
+   **Layer** (two songs together until Drop swaps them; only songs that match in tempo and key), and **Cue /
+   preview** on a separate output (headphones): Cue a loaded or cued deck and "Set start here", preview songs in
+   the picker. Cue never touches the mix.
    Every action goes through `AutoDJ`: it still beat-matches, chooses the transition, times it on the grid
    and steers back to the mood. Do not add manual decks, crossfader, per-deck EQ/faders, jog control,
    skip/seek, energy slider or tempo controls, and never let UI write to deck automation directly.
@@ -80,14 +82,16 @@ lib/
     transitions.ts            client: blend, filterSweep, echoOut, cut, dropIn, dialogueIn automation
     fx.ts                     client: staff effects on the master (echo, filter, reverb, noise riser)
     keylock.ts                client: loads public/worklets/keylock.js (phase-vocoder pitch corrector)
+    outputs.ts                client: list output devices, route an AudioContext (setSinkId), test tone
   library/
     scan.ts                   client: folder walk, content hash ids, tag reading
     store.ts                  client: IndexedDB persistence (idb-keyval): tracks, settings, session, set log
     setlog.ts · issues.ts     PURE: nights + CSV for licence reports; library health checks
-    preview.ts                client: admin grid preview (track + metronome clicks)
+    preview.ts                client: the shared preview player (editor, booth Cue, picker) on the preview output
 store/
   library.ts                  zustand: tracks, folder, settings, analysis queue
   session.ts                  zustand: owns the single AutoDJ, mirrors its status
+  preview.ts                  zustand: the shared preview player (one preview at a time)
 types/fs-access.d.ts          File System Access API typings
 public/sw.js                  service worker (offline app shell)
 public/worklets/keylock.js    key-lock AudioWorklet (plain JS; DSP unit-tested in lib/audio/keylock.test.ts)
@@ -246,6 +250,20 @@ before the current song's outro or 8 bars before the layered song ends, so the m
 song comes in on its hook (else its drop) unless staff chose beginning / drop / a bar (`layerEntry`). The booth's
 Layer button layers the cued song if it matches, else opens the picker filtered to matching songs.
 
+Audio outputs (Library → Audio outputs; `settings.mainOutput`, `settings.previewOutput`): the mix goes to the club
+speakers (`AudioEngine.setOutput`, e.g. Bluetooth or the 3.5 mm jack; changeable mid-set), every preview to the
+preview / cue output (`GridPreview.sinkId`, e.g. USB-C or HDMI) via `AudioContext.setSinkId` (Chrome/Edge 110+,
+typed in `types/audio-sink.d.ts`). Device names need one microphone-permission grant (`unlockLabels`; nothing is
+recorded). If the chosen club output disappears the mix falls back to the default output and the booth shows a
+note; it returns when the device does. `previewIsSeparate()` — a preview output chosen and different from the
+club one — is what allows previews and Cue during a set; otherwise they're blocked while a set plays. The booth
+display waits for `engine.displayDelay` (key-lock delay + the output's `outputLatency`, large on Bluetooth).
+
+Cue / preview: one shared player (`sharedPreview`, `store/preview.ts`) for the track editor, the booth's Cue (loaded
+decks before Play, and the cued deck) and the picker's ▶ (30 s of the hook, else the drop), so only one plays at a
+time. Cue plays from where the deck will start (`cuePlan`, through a dialogue's jump); "Set start here" turns the
+cue playhead into a bar entry (`barAt`). Closing the picker or the editor stops its preview.
+
 Start from: `AutoDJ.setEntry(choice)` re-plans the cued transition (like Drop and requests: only before it is
 under way) and the cued deck's overview shows a ⚑ where it will start.
 
@@ -323,6 +341,10 @@ device, and starts `next start -p 3100` (build first). Audio runs for real; noth
   filter before a drop also darkens the incoming build-up — on purpose). Re-planning a mix also cancels an
   effect staff fired by hand moments before.
 - Decks loaded before Play live in memory only (lost on reload).
+- Outputs: a laptop's 3.5 mm jack and its speakers are usually one output, so the club speakers and the
+  headphones must be different devices for Cue during a set. A Bluetooth drop can't be detected (the mix keeps
+  "playing" inside the app), and `outputLatency` is the browser's estimate. Choosing two different outputs can't
+  be tested headless (no devices); the e2e test covers the shared-output path.
 - The editor preview doesn't apply key-lock or volume matching, so it can sound slightly different from the booth.
 - Layer uses two decks (the playing and the cued). Layering a third song, or an a-cappella crate over the running
   mix on decks C/D, isn't built; nor is vocal separation (needs an ML model).

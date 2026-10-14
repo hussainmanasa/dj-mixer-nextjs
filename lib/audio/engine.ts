@@ -6,6 +6,7 @@ import { MAX_DECKS, MIN_DECKS } from "@/lib/types";
 import { Deck } from "./deck";
 import { MasterFx } from "./fx";
 import { createKeyLock, KEYLOCK_DELAY_SAMPLES, loadKeyLock } from "./keylock";
+import { listOutputs, routeTo } from "./outputs";
 
 export class AudioEngine {
   readonly ctx: AudioContext;
@@ -56,6 +57,43 @@ export class AudioEngine {
     for (const d of this.decks) d.setKeyLock(ok ? createKeyLock(this.ctx) : null);
     this.outputDelay = ok ? KEYLOCK_DELAY_SAMPLES / this.ctx.sampleRate : 0;
     return ok;
+  }
+
+  /** The chosen output for the mix ("" = system default) and whether it is actually in use. */
+  private output = { wanted: "", missing: false };
+  /** Called when the chosen output disappears or comes back. */
+  onOutputChange: ((missing: boolean) => void) | null = null;
+
+  /**
+   * Send the mix to an output device (the club speakers); can change mid-set.
+   * If that device disappears (Bluetooth drops, cable pulled) the mix falls
+   * back to the default output, and returns when the device does.
+   */
+  async setOutput(deviceId: string): Promise<boolean> {
+    this.output.wanted = deviceId;
+    navigator.mediaDevices?.addEventListener?.("devicechange", this.checkOutput);
+    return this.checkOutput();
+  }
+
+  private checkOutput = async (): Promise<boolean> => {
+    const { wanted } = this.output;
+    const present = wanted === "" || (await listOutputs()).some((d) => d.id === wanted);
+    const ok = present && (await routeTo(this.ctx, wanted));
+    if (!ok) await routeTo(this.ctx, "");
+    if (this.output.missing !== !ok) {
+      this.output.missing = !ok;
+      this.onOutputChange?.(!ok);
+    }
+    return ok;
+  };
+
+  /**
+   * Seconds from scheduling a sound to the room hearing it: the key-lock delay
+   * plus the output device's own latency (large on Bluetooth). The booth's
+   * visuals use it so the jog wheels and beat pulse match what people hear.
+   */
+  get displayDelay(): number {
+    return this.outputDelay + (this.ctx.outputLatency || 0);
   }
 
   get now(): number {
@@ -124,6 +162,7 @@ export class AudioEngine {
   }
 
   async close(): Promise<void> {
+    navigator.mediaDevices?.removeEventListener?.("devicechange", this.checkOutput);
     for (const d of this.decks) d.unload();
     await this.ctx.close();
   }

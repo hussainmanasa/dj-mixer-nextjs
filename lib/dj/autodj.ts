@@ -222,6 +222,10 @@ export class AutoDJ {
     this.keyLock = keyLock;
     this.moodKey = mood;
     this.deps = deps;
+    this.engine.onOutputChange = (missing) => {
+      this.note = missing ? "Club speakers output not found — playing on this computer's default output" : null;
+      this.emit();
+    };
     for (const deck of this.engine.decks) {
       deck.onUnexpectedEnd = (d) => {
         if (this.playing && this.current?.deck === d) void this.recover("track ended early");
@@ -1002,8 +1006,8 @@ export class AutoDJ {
 
   /** Live, read-only view of the decks for the booth display. Never changes the mix. */
   snapshot(): BoothSnapshot {
-    // What the room hears now: deck times lag the master by the key-lock delay.
-    const now = this.engine.now - this.engine.outputDelay;
+    // What the room hears now: deck times lag by the key-lock delay and the output's own latency.
+    const now = this.engine.now - this.engine.displayDelay;
     const p = this.planned;
     const liveTl = this.current?.deck.timeline;
     return {

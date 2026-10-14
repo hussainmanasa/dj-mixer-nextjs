@@ -55,7 +55,7 @@ test("Desi Night: opener hook → dialogue → drop, then songs wait for Drop; S
   await page.click("nav >> text=Booth");
   await page.getByRole("button", { name: /^Desi Night/ }).click();
   await page.getByRole("button", { name: "Add track" }).click();
-  await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove B" }).getByRole("button").click();
+  await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove B" }).getByRole("button").last().click();
   await page.locator("button[aria-busy]").click();
 
   // Opener: A plays from its hook (its first drop, ~0:45), with B up next as dialogue → drop.

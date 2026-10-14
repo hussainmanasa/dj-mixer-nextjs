@@ -3,7 +3,9 @@
 import { useRef } from "react";
 import { EQ_KILL_DB } from "@/lib/audio/deck";
 import { SCHEDULE_MARGIN } from "@/lib/dj/autodj";
-import { entryOptions } from "@/lib/dj/cues";
+import { barAt, entryOptions, type CuePlan } from "@/lib/dj/cues";
+import { useLibrary } from "@/store/library";
+import { usePreview } from "@/store/preview";
 import type { EntryChoice, Track } from "@/lib/types";
 import { formatTime, setText, useBoothFrame } from "./frame";
 import { JogWheel } from "./JogWheel";
@@ -44,6 +46,7 @@ export function DeckPanel({
   onEject,
   keyLock = false,
   entry,
+  cue,
 }: {
   deck: number;
   role: DeckRole;
@@ -56,6 +59,8 @@ export function DeckPanel({
   keyLock?: boolean;
   /** Cued deck only: where the song comes in ("Start from"), and how to change it. */
   entry?: { choice: EntryChoice; startAt: number; set: (choice: EntryChoice) => void };
+  /** Cue on the preview output (headphones): what to play, and whether it would be heard by the club. */
+  cue?: { plan: CuePlan; blocked: boolean };
 }) {
   const badge = useRef<HTMLSpanElement>(null);
   const bpm = useRef<HTMLSpanElement>(null);
@@ -65,6 +70,13 @@ export function DeckPanel({
   const bass = useRef<HTMLSpanElement>(null);
   const choose = useRef<HTMLButtonElement>(null);
   const startFrom = useRef<HTMLDivElement>(null);
+  const cueHead = useRef<HTMLSpanElement>(null);
+  const cueTag = `cue:${deck}`;
+  const cueing = usePreview((s) => s.playing === cueTag);
+  const cueLoading = usePreview((s) => s.loading);
+  const playPreview = usePreview((s) => s.play);
+  const stopPreview = usePreview((s) => s.stop);
+  const getFile = useLibrary((s) => s.getFile);
   const a = track?.analysis ?? null;
 
   useBoothFrame((snap) => {
@@ -80,6 +92,10 @@ export function DeckPanel({
     const locked = role === "incoming" && !!snap?.mix && snap.now >= snap.mix.start - SCHEDULE_MARGIN;
     if (choose.current) choose.current.style.display = locked ? "none" : "";
     if (startFrom.current) startFrom.current.style.display = locked ? "none" : "";
+    // Cue playhead (the preview player's position, not the deck's).
+    const preview = usePreview.getState();
+    const pos = preview.playing === cueTag ? (preview.position() ?? 0) : null;
+    setText(cueHead.current, pos === null ? "" : `cue ${formatTime(pos)}.${Math.floor((pos % 1) * 10)}`);
     const rate = view?.rate ?? 1;
     setText(bpm.current, a ? (a.bpm * rate).toFixed(1) : "—");
     const pct = (rate - 1) * 100;
@@ -194,6 +210,41 @@ export function DeckPanel({
               <span className="rounded-full px-3 py-1 text-xs font-semibold" style={{ background: color, color: "#07070b" }}>
                 Bar {entry.choice.bar + 1}
               </span>
+            )}
+            {cue && (
+              <div className="mt-1 flex w-full flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={cue.blocked || (cueLoading && !cueing)}
+                  title={cue.blocked ? "Choose a separate preview output (Library → Audio outputs) to cue during a set" : "Listen on the preview output"}
+                  onClick={() =>
+                    cueing
+                      ? stopPreview()
+                      : playPreview(cueTag, async (p) =>
+                          p.playFrom(
+                            await getFile(track),
+                            cue.plan.from,
+                            cue.plan.jump ? { jump: { ...cue.plan.jump, after: 30 } } : { length: 60 },
+                          ),
+                        )
+                  }
+                >
+                  {cueing ? "■ Stop cue" : "🎧 Cue"}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={!cueing}
+                  onClick={() => {
+                    const pos = usePreview.getState().position();
+                    if (pos !== null && track.analysis) entry.set({ kind: "bar", bar: barAt(track.analysis, pos) });
+                  }}
+                >
+                  Set start here
+                </button>
+                <span ref={cueHead} className="font-mono text-xs text-muted" />
+              </div>
             )}
           </div>
         )}

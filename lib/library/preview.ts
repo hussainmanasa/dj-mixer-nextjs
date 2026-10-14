@@ -1,8 +1,11 @@
-// Admin preview in the track editor: play part of a track — with a click on
-// every beat of a grid (to check it by ear), or from a marker, or a dialogue
-// followed by a jump to the drop — and report the playhead for "Mark now".
-// Uses its own AudioContext; the Library page only allows it while the booth
-// is stopped (it plays through the same speakers). Client-only.
+// Previews: play part of a track — with a click on every beat of a grid (to
+// check it by ear), or from a marker, or a dialogue followed by a jump to the
+// drop — and report the playhead for "Mark now" / "Set start here". Uses its
+// own AudioContext, routed to the preview / cue output (headphones) when one
+// is chosen, so it never touches the mix. One shared player (`sharedPreview`)
+// serves the track editor, the booth's Cue and the picker. Client-only.
+
+import { routeTo } from "@/lib/audio/outputs";
 
 export interface Grid {
   bpm: number;
@@ -19,6 +22,9 @@ export interface PlayOptions {
 }
 
 export class GridPreview {
+  /** Output device for every preview ("" = system default). Set from the settings. */
+  static sinkId = "";
+
   private ctx: AudioContext | null = null;
   private cache: { file: Blob; buffer: AudioBuffer } | null = null;
   private nodes: AudioScheduledSourceNode[] = [];
@@ -35,6 +41,7 @@ export class GridPreview {
   async playFrom(file: Blob, from: number, opts: PlayOptions = {}): Promise<void> {
     this.stop();
     this.ctx ??= new AudioContext({ latencyHint: "interactive" });
+    await routeTo(this.ctx, GridPreview.sinkId);
     await this.ctx.resume();
     if (this.cache?.file !== file) this.cache = { file, buffer: await this.ctx.decodeAudioData(await file.arrayBuffer()) };
     const ctx = this.ctx;
@@ -114,3 +121,6 @@ export class GridPreview {
     this.ctx = null;
   }
 }
+
+/** The one preview player (editor, booth Cue, picker): only one preview plays at a time. */
+export const sharedPreview = new GridPreview();

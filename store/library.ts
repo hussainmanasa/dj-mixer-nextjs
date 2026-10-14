@@ -6,6 +6,7 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import { analyzeFile } from "@/lib/analysis/analyze";
+import { GridPreview } from "@/lib/library/preview";
 import { ANALYSIS_VERSION } from "@/lib/analysis/bpm";
 import { ensurePermission, fileId, getFileAt, isSupported, pickFolder, trackFromFile, walk } from "@/lib/library/scan";
 import {
@@ -41,6 +42,8 @@ interface LibraryState {
   retryFailed: () => Promise<void>;
   setDeckCount: (n: number) => Promise<void>;
   setKeyLock: (on: boolean) => Promise<void>;
+  /** Choose the club speakers (mix) and the preview / cue output. */
+  setOutputs: (outputs: { mainOutput?: string; previewOutput?: string | null }) => Promise<void>;
   /** Save an edited mood (only the fields that differ from the preset are stored); null resets it. */
   saveMood: (mood: Mood | null, id: MoodId) => Promise<void>;
   /** Fallback when folders can't be opened: add files for this session only. */
@@ -88,6 +91,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     if (folder) folderState = (await ensurePermission(folder, false)) ? "ready" : "needs-permission";
     // Tracks interrupted mid-analysis go back to pending.
     for (const t of Object.values(tracks)) if (t.status === "pending") t.analysis = null;
+    GridPreview.sinkId = settings.previewOutput ?? "";
     set({ hydrated: true, folder: folder ?? null, folderState, tracks, settings });
   },
 
@@ -183,6 +187,13 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     const deckCount = Math.max(MIN_DECKS, Math.min(MAX_DECKS, Math.round(n)));
     const settings = { ...get().settings, deckCount };
     set({ settings });
+    await saveSettings(settings);
+  },
+
+  async setOutputs(outputs) {
+    const settings = { ...get().settings, ...outputs };
+    set({ settings });
+    GridPreview.sinkId = settings.previewOutput ?? "";
     await saveSettings(settings);
   },
 
@@ -323,6 +334,14 @@ function isStale(t: Track): boolean {
 export function useMoods(): Mood[] {
   const overrides = useLibrary((s) => s.settings.moods);
   return useMemo(() => resolveMoods(overrides), [overrides]);
+}
+
+/**
+ * Previews and Cue have their own output, separate from the club speakers, so
+ * they can play during a set without the crowd hearing them.
+ */
+export function previewIsSeparate(s: { mainOutput: string; previewOutput: string | null }): boolean {
+  return s.previewOutput !== null && s.previewOutput !== s.mainOutput;
 }
 
 export function readyTracks(tracks: Record<string, Track>): Track[] {

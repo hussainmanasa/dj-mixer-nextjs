@@ -2,7 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { useMoods } from "@/store/library";
+import { dropCue } from "@/lib/dj/mixpoints";
+import { hookOf } from "@/lib/dj/cues";
+import type { Track } from "@/lib/types";
+import { previewIsSeparate, useLibrary, useMoods } from "@/store/library";
+import { usePreview } from "@/store/preview";
 import { useSession } from "@/store/session";
 
 /**
@@ -27,6 +31,14 @@ export function TrackPicker({
   const rankTracks = useSession((s) => s.rankTracks);
   const request = useSession((s) => s.request);
   const load = useSession((s) => s.loadDeck);
+  // Preview on the preview output; during a set only if that's separate from the club speakers.
+  const boothPlaying = useSession((s) => s.status.playing);
+  const separate = useLibrary((s) => previewIsSeparate(s.settings));
+  const previewBlocked = boothPlaying && !separate;
+  const stopPick = () => {
+    const p = usePreview.getState();
+    if (p.playing?.startsWith("pick:")) p.stop();
+  };
   const layerTrack = useSession((s) => s.layer);
   const moodId = useSession((s) => s.status.mood);
   const mood = useMoods().find((m) => m.id === moodId)!;
@@ -41,6 +53,14 @@ export function TrackPicker({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+  // Closing the picker stops its preview.
+  useEffect(
+    () => () => {
+      const p = usePreview.getState();
+      if (p.playing?.startsWith("pick:")) p.stop();
+    },
+    [],
+  );
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -93,16 +113,18 @@ export function TrackPicker({
           {shown.map((o) => {
             const fit = Math.max(0, Math.min(1, o.score));
             return (
-              <li key={o.track.id}>
+              <li key={o.track.id} className="flex items-center gap-2">
+                <PreviewButton track={o.track} blocked={previewBlocked} />
                 <button
                   type="button"
                   onClick={() => {
+                    stopPick();
                     if (layer) layerTrack(o.track.id);
                     else if (loadDeck !== undefined) load(loadDeck, o.track.id);
                     else request(o.track.id, next);
                     onClose();
                   }}
-                  className="flex w-full items-center gap-4 rounded-2xl px-3 py-3 text-left hover:bg-surface-2"
+                  className="flex min-w-0 flex-1 items-center gap-4 rounded-2xl px-3 py-3 text-left hover:bg-surface-2"
                 >
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-semibold">{o.track.title}</p>
@@ -134,3 +156,27 @@ export function TrackPicker({
     </div>
   );
 }
+
+/** Listen to a song's hook (else its drop) for 30 s on the preview output before choosing it. */
+function PreviewButton({ track, blocked }: { track: Track; blocked: boolean }) {
+  const tag = `pick:${track.id}`;
+  const playing = usePreview((s) => s.playing === tag);
+  const loading = usePreview((s) => s.loading);
+  const play = usePreview((s) => s.play);
+  const stop = usePreview((s) => s.stop);
+  const getFile = useLibrary((s) => s.getFile);
+  const from = hookOf(track.cues)?.start ?? dropCue(track.analysis!);
+  return (
+    <button
+      type="button"
+      className="btn h-11 w-11 shrink-0 px-0"
+      disabled={blocked || (loading && !playing)}
+      aria-label={`${playing ? "Stop preview of" : "Preview"} ${track.title}`}
+      title={blocked ? "Choose a separate preview output (Library → Audio outputs) to preview during a set" : "Preview on the preview output"}
+      onClick={() => (playing ? stop() : play(tag, async (p) => p.playFrom(await getFile(track), from, { length: 30 })))}
+    >
+      {playing ? "■" : "▶"}
+    </button>
+  );
+}
+

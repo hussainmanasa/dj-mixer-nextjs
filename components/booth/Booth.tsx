@@ -3,11 +3,11 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { SCHEDULE_MARGIN, STOP_FADE_SECONDS, type AutoDJStatus } from "@/lib/dj/autodj";
-import { firstStart, resolveEntry } from "@/lib/dj/cues";
+import { cuePlan, firstStart, resolveEntry } from "@/lib/dj/cues";
 import { gridPosition, PHRASE_BARS } from "@/lib/dj/mixpoints";
 
 import type { Track, TransitionKind } from "@/lib/types";
-import { readyTracks, useLibrary, useMoods } from "@/store/library";
+import { previewIsSeparate, readyTracks, useLibrary, useMoods } from "@/store/library";
 import { useSession } from "@/store/session";
 import { DeckPanel, type DeckRole } from "./DeckPanel";
 import { formatTime, setText, useBoothFrame } from "./frame";
@@ -46,6 +46,8 @@ export function Booth() {
   const folderState = useLibrary((s) => s.folderState);
   const analysis = useLibrary((s) => s.analysis);
   const settingsDecks = useLibrary((s) => s.settings.deckCount);
+  // Cue during a set needs its own output, or the club would hear it.
+  const previewSeparate = useLibrary((s) => previewIsSeparate(s.settings));
   const ready = readyTracks(tracks).length;
 
   const status = useSession((s) => s.status);
@@ -102,6 +104,7 @@ export function Booth() {
                 }
               : undefined
           }
+          cue={preload ? { plan: cuePlan(preload.track, preload.entry, i === 0, !!mood.opener), blocked: false } : undefined}
         />
       );
     }
@@ -122,6 +125,11 @@ export function Booth() {
         onChoose={choose}
         keyLock={status.playing && status.keyLock}
         entry={role === "incoming" && status.next && !stopping ? { choice: status.next.entry, startAt: status.next.startAt, set: setEntry } : undefined}
+        cue={
+          role === "incoming" && status.next && !stopping
+            ? { plan: cuePlan(status.next.track, status.next.entry, false), blocked: !previewSeparate }
+            : undefined
+        }
       />
     );
   });

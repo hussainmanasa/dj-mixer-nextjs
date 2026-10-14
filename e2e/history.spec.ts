@@ -10,7 +10,7 @@ test("plays are logged by night, exported as CSV, and the queue is saved", async
   await page.getByRole("button", { name: "Add track" }).click();
   const first = page.getByRole("dialog").getByRole("listitem").first();
   const queued = (await first.locator("p").first().textContent())!.trim();
-  await first.getByRole("button").click();
+  await first.getByRole("button").last().click();
   const savedQueue = () =>
     page.evaluate(
       () =>

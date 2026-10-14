@@ -1,12 +1,13 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { drops, FULL_LEVEL } from "@/lib/analysis/structure";
 import { dialogueOf, hookOf, snapToBar, validateCues } from "@/lib/dj/cues";
 import { barSeconds, dropCue } from "@/lib/dj/mixpoints";
-import { GridPreview } from "@/lib/library/preview";
+import type { GridPreview } from "@/lib/library/preview";
 import type { Track, TrackCues, TrackFlag } from "@/lib/types";
-import { useLibrary } from "@/store/library";
+import { previewIsSeparate, useLibrary } from "@/store/library";
+import { usePreview as usePreviewStore } from "@/store/preview";
 import { useSession } from "@/store/session";
 
 const CAMELOT = [...Array.from({ length: 12 }, (_, i) => `${i + 1}A`), ...Array.from({ length: 12 }, (_, i) => `${i + 1}B`)];
@@ -26,33 +27,24 @@ const PreviewCtx = createContext<PreviewApi | null>(null);
 const usePreview = () => useContext(PreviewCtx)!;
 
 function usePreviewApi(): PreviewApi {
-  const preview = useRef<GridPreview | null>(null);
-  const [playing, setPlaying] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => () => void preview.current?.close(), []);
-  const stop = useCallback(() => {
-    preview.current?.stop();
-    setPlaying(null);
-  }, []);
-  const play = useCallback(async (tag: string, run: (p: GridPreview) => Promise<void>) => {
-    setError(null);
-    preview.current ??= new GridPreview();
-    preview.current.onEnded = () => setPlaying(null);
-    setPlaying(null);
-    setLoading(true);
-    try {
-      // Decoding a song takes a moment: only report "playing" (and allow Mark) once it has started.
-      await run(preview.current);
-      setPlaying(tag);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not play the track");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-  const position = useCallback(() => preview.current?.position() ?? null, []);
-  return { playing, loading, play, stop, position, error };
+  // The shared preview player (also used by the booth's Cue and the picker).
+  const api = usePreviewStore();
+  // Leaving the editor stops its own preview.
+  useEffect(
+    () => () => {
+      const { playing, stop } = usePreviewStore.getState();
+      if (playing === "grid" || playing === "cues" || playing === "dialogue") stop();
+    },
+    [],
+  );
+  return api;
+}
+
+/** Previews would be heard on the club speakers: a set is playing and no separate preview output is chosen. */
+function usePreviewBlocked(): boolean {
+  const playing = useSession((s) => s.status.playing);
+  const separate = useLibrary((s) => previewIsSeparate(s.settings));
+  return playing && !separate;
 }
 
 /**
@@ -207,7 +199,7 @@ function clock(sec: number): string {
 function CueSection({ track }: { track: Track }) {
   const setCues = useLibrary((s) => s.setCues);
   const getFile = useLibrary((s) => s.getFile);
-  const boothPlaying = useSession((s) => s.status.playing);
+  const boothPlaying = usePreviewBlocked();
   const preview = usePreview();
   const a = track.analysis!;
   const cues = track.cues ?? {};
@@ -268,7 +260,7 @@ function CueSection({ track }: { track: Track }) {
           Playhead <span ref={head} className="font-mono text-foreground">—</span>
         </span>
       </div>
-      {boothPlaying && <p className="mt-2 text-sm text-warn">Stop the set to listen — previews play through the club speakers.</p>}
+      {boothPlaying && <p className="mt-2 text-sm text-warn">A set is playing: choose a separate preview output (Audio outputs, above) to listen without the club hearing it.</p>}
 
       <Suggestions track={track} />
 
@@ -332,7 +324,7 @@ function CueSection({ track }: { track: Track }) {
 function Suggestions({ track }: { track: Track }) {
   const setCues = useLibrary((s) => s.setCues);
   const getFile = useLibrary((s) => s.getFile);
-  const boothPlaying = useSession((s) => s.status.playing);
+  const boothPlaying = usePreviewBlocked();
   const preview = usePreview();
   const a = track.analysis!;
   if (a.suggestedHook === undefined && a.suggestedDialogue === undefined) {
@@ -473,7 +465,7 @@ function DropSection({ track }: { track: Track }) {
 function GridSection({ track }: { track: Track }) {
   const setOverrides = useLibrary((s) => s.setOverrides);
   const getFile = useLibrary((s) => s.getFile);
-  const boothPlaying = useSession((s) => s.status.playing);
+  const boothPlaying = usePreviewBlocked();
   const a = track.analysis!;
   const [bpm, setBpm] = useState(a.bpm);
   const [firstBeat, setFirstBeat] = useState(a.firstBeat);
@@ -581,7 +573,7 @@ function GridSection({ track }: { track: Track }) {
         >
           Back to detected
         </button>
-        {boothPlaying && <span className="text-sm text-warn">Stop the set to listen — previews play through the club speakers.</span>}
+        {boothPlaying && <span className="text-sm text-warn">A set is playing: choose a separate preview output (Audio outputs, above) to listen without the club hearing it.</span>}
         {!validBpm && <span className="text-sm text-bad">BPM must be between 60 and 200.</span>}
         {(error ?? preview.error) && <span className="text-sm text-bad">{error ?? preview.error}</span>}
       </div>

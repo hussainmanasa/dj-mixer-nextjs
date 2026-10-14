@@ -19,7 +19,8 @@ Open http://localhost:3000, then:
 
 1. **Library** → *Choose music folder* and pick the folder with your tracks (MP3, M4A/AAC, WAV, FLAC, Ogg).
    Each track is analysed once (tempo, beat grid, drops, loudness, key — tags win over detection).
-2. Optionally set **Decks** to 2, 3 or 4.
+2. Optionally set **Decks** to 2, 3 or 4, and under **Audio outputs** choose the club speakers (e.g. Bluetooth or
+   the 3.5 mm jack) and a separate **Preview & Cue** output for headphones (e.g. USB-C or HDMI).
 3. **Booth** → pick a mood → **Play**. Change the mood any time; the music never stops.
    Before pressing Play you can **Load track** into any deck (Deck A plays first, then B, C, D) and pick where
    each starts with **Start from**; the auto-DJ takes over after them.
@@ -29,6 +30,8 @@ Open http://localhost:3000, then:
    effects itself as the music changes (the FX pad lights up, marked "auto").
    **Layer** plays the next song over the current one (its bass off) until you press **Drop**, which swaps
    them — only for songs that match in tempo and key.
+   **🎧 Cue** on a loaded or cued deck plays it in your headphones (the preview output); **Set start here** makes
+   that its start. The picker's **▶** previews a song before you choose it.
 
 ## Running at a venue
 
