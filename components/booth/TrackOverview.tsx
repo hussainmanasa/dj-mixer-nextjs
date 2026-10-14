@@ -97,10 +97,12 @@ export function TrackOverview({
         <div key={m.label} className="absolute top-0 h-1.5 rounded-b-sm" style={{ left: `${m.left}%`, width: `${Math.max(0.5, m.width)}%`, background: m.color }} />
       ))}
       {startAt !== undefined && a && (
-        <div className="absolute inset-y-0 w-0.5 -translate-x-1/2" style={{ left: `${(startAt / a.duration) * 100}%`, background: color }}>
-          <span className="absolute -top-0.5 left-0.5 text-[10px] leading-none" style={{ color }}>
-            ⚑
-          </span>
+        // White with a dark edge so it shows over drop bars in the mood colour too.
+        <div
+          className="absolute inset-y-0 w-0.5 -translate-x-1/2 bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.7)]"
+          style={{ left: `${(startAt / a.duration) * 100}%` }}
+        >
+          <span className="absolute -top-0.5 left-1 rounded-sm bg-black/70 px-0.5 text-[10px] leading-none text-white">⚑</span>
         </div>
       )}
       <div ref={playhead} className="absolute inset-y-0 w-0.5 -translate-x-1/2 bg-white shadow-[0_0_6px_white]" style={{ left: 0 }} />

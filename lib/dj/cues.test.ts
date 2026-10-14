@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Track } from "@/lib/types";
 import { getMood } from "./moods";
-import { defaultStart, entryOptions, openerWindow, resolveEntry, snapToBar, validateCues } from "./cues";
+import { defaultStart, entryOptions, firstStart, openerWindow, resolveEntry, snapToBar, validateCues } from "./cues";
 import { pickOpener } from "./selector";
 
 // 120 BPM → 2 s bars from 0.5 s; drops at bars 64 (and 112).
@@ -83,5 +83,22 @@ describe("pickOpener", () => {
   });
   it("is only for moods with an opener", () => {
     expect(pickOpener([track("t")], getMood("peak"))).toBeNull();
+  });
+});
+
+describe("firstStart (a deck loaded before Play)", () => {
+  const marked = track("marked", { cues: { dialogueStart: 1.2, dialogueEnd: 6.4, hookStart: 20.5, hookEnd: 52.5, start: 8.5 } });
+  it("auto starts at the default start, or plays the hook as an opener", () => {
+    expect(firstStart(marked)).toEqual({ start: 8.5 });
+    expect(firstStart(marked, { kind: "auto" }, true)).toEqual({ start: 20.5, openerEnd: 52.5 });
+  });
+  it("dialogue plays the dialogue, then jumps to the drop", () => {
+    expect(firstStart(marked, { kind: "dialogue" })).toEqual({ start: 1.2, jump: { after: 6.4 - 1.2, to: 128.5 } });
+  });
+  it("honours beginning, hook, drop and a bar", () => {
+    expect(firstStart(marked, { kind: "beginning" })).toEqual({ start: 0 });
+    expect(firstStart(marked, { kind: "hook" })).toEqual({ start: 20.5 });
+    expect(firstStart(marked, { kind: "drop" })).toEqual({ start: 128.5 });
+    expect(firstStart(marked, { kind: "bar", bar: 4 })).toEqual({ start: 8.5 });
   });
 });

@@ -21,9 +21,12 @@ Open http://localhost:3000, then:
    Each track is analysed once (tempo, beat grid, drops, loudness, key — tags win over detection).
 2. Optionally set **Decks** to 2, 3 or 4.
 3. **Booth** → pick a mood → **Play**. Change the mood any time; the music never stops.
+   Before pressing Play you can **Load track** into any deck (Deck A plays first, then B, C, D) and pick where
+   each starts with **Start from**; the auto-DJ takes over after them.
 4. Optional, while it plays: **Drop** brings the next track in on its drop; **Effects** (Echo, Filter, Reverb,
    Riser) fire on the next beat; **Change track** / **Add track** request music. The auto-DJ still
-   beat-matches and mixes every request for the mood.
+   beat-matches and mixes every request for the mood, and in moods with *Add effects on transitions* it fires
+   effects itself as the music changes (the FX pad lights up, marked "auto").
 
 ## Running at a venue
 

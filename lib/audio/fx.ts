@@ -115,6 +115,42 @@ export class MasterFx {
     return end;
   }
 
+  /**
+   * Tension into a drop: a low-pass closes from `t` to `drop` (with a little
+   * resonance) and snaps fully open on the drop. Returns `drop`.
+   */
+  filterInto(t: number, drop: number): number {
+    const f = hold(this.filter.frequency, t);
+    f.setValueAtTime(FILTER_OPEN_HZ, t);
+    f.exponentialRampToValueAtTime(500, drop - 0.01);
+    f.setValueAtTime(FILTER_OPEN_HZ, drop);
+    const q = hold(this.filter.Q, t);
+    q.setValueAtTime(0.7, t);
+    q.linearRampToValueAtTime(3, drop - 0.01);
+    q.setValueAtTime(0.7, drop);
+    return drop;
+  }
+
+  /**
+   * Drop everything scheduled from now on and ease each effect back to rest
+   * (the transition the effects belonged to was re-planned).
+   */
+  cancelScheduled(): void {
+    const now = this.ctx.currentTime;
+    const rest: [AudioParam, number][] = [
+      [this.echoSend.gain, 0],
+      [this.reverbSend.gain, 0],
+      [this.filter.Q, 0.7],
+    ];
+    for (const [p, v] of rest) {
+      p.cancelAndHoldAtTime(now);
+      p.linearRampToValueAtTime(v, now + 0.25);
+    }
+    this.filter.frequency.cancelAndHoldAtTime(now);
+    this.filter.frequency.exponentialRampToValueAtTime(FILTER_OPEN_HZ, now + 0.25);
+    this.stopRiser();
+  }
+
   /** Cancel a riser (its Drop was re-planned). */
   stopRiser(): void {
     const now = this.ctx.currentTime;

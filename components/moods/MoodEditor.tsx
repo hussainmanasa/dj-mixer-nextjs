@@ -113,6 +113,17 @@ function MoodCard({ mood, edited, crates }: { mood: Mood; edited: boolean; crate
       </label>
 
       <label className="flex cursor-pointer items-start gap-3 text-sm">
+        <input type="checkbox" checked={!!draft.autoFx} onChange={(e) => set("autoFx", e.target.checked || undefined)} className="mt-0.5 h-5 w-5 accent-accent" />
+        <span>
+          Add effects on transitions
+          <span className="block text-muted">
+            The auto-DJ fires effects as the music changes: a reverb or echo as basslines swap, a riser and a closing filter into
+            drops. Dialogue drops and rewinds stay clean.
+          </span>
+        </span>
+      </label>
+
+      <label className="flex cursor-pointer items-start gap-3 text-sm">
         <input type="checkbox" checked={draft.dropSwap} onChange={(e) => set("dropSwap", e.target.checked)} className="mt-0.5 h-5 w-5 accent-accent" />
         <span>
           Drop swaps

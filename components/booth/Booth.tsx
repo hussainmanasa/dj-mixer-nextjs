@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { SCHEDULE_MARGIN, STOP_FADE_SECONDS, type AutoDJStatus } from "@/lib/dj/autodj";
+import { firstStart, resolveEntry } from "@/lib/dj/cues";
 import { gridPosition, PHRASE_BARS } from "@/lib/dj/mixpoints";
 
 import type { Track, TransitionKind } from "@/lib/types";
@@ -62,7 +63,10 @@ export function Booth() {
   }, [canPlay, folderState, resumeAvailable, tryAutoResume]);
 
   // Track picker: `next` replaces the cued track, otherwise it adds to the queue.
-  const [picker, setPicker] = useState<{ next: boolean } | null>(null);
+  const [picker, setPicker] = useState<{ next: boolean; loadDeck?: number } | null>(null);
+  const preloads = useSession((s) => s.preloads);
+  const ejectDeck = useSession((s) => s.ejectDeck);
+  const setPreloadEntry = useSession((s) => s.setPreloadEntry);
   const closePicker = useCallback(() => setPicker(null), []);
 
   const moods = useMoods();
@@ -72,6 +76,34 @@ export function Booth() {
   const live = status.playing && !stopping;
   const deckCount = status.playing ? status.deckCount : settingsDecks;
   const decks = Array.from({ length: deckCount }, (_, i) => {
+    // Before Play, staff can load a song into any deck (Deck A plays first, the rest next in order).
+    const preload = !status.playing && !starting ? (preloads[i] ?? null) : null;
+    if (!status.playing && !starting) {
+      return (
+        <DeckPanel
+          key={i}
+          deck={i}
+          role={preload ? "loaded" : "idle"}
+          track={preload?.track ?? null}
+          color={color}
+          onChoose={canPlay ? { label: preload ? "Change" : "Load track", open: () => setPicker({ next: false, loadDeck: i }) } : undefined}
+          onEject={preload ? () => ejectDeck(i) : undefined}
+          entry={
+            preload
+              ? {
+                  choice: preload.entry,
+                  // Deck A: where the set starts. Later decks: where they'll come in (before any build-up).
+                  startAt:
+                    i === 0
+                      ? firstStart(preload.track, preload.entry, !!mood.opener).start
+                      : ((e) => e.dialogue?.start ?? e.land)(resolveEntry(preload.track, preload.entry)),
+                  set: (choice) => setPreloadEntry(i, choice),
+                }
+              : undefined
+          }
+        />
+      );
+    }
     const { role, track } = deckRole(status, i);
     const choose =
       role === "live" || !canPlay || stopping
@@ -125,7 +157,7 @@ export function Booth() {
   return (
     <main className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col gap-8 px-6 py-8" style={{ "--mood": color } as CSSProperties}>
       <BeatPulse deck={status.now?.deck ?? null} track={status.now?.track ?? null} color={color} />
-      {picker && <TrackPicker next={picker.next} color={color} onClose={closePicker} />}
+      {picker && <TrackPicker next={picker.next} loadDeck={picker.loadDeck} color={color} onClose={closePicker} />}
 
       {resumeAvailable && !status.playing && canPlay && (
         <div className="flex items-center justify-between rounded-xl border border-warn/40 bg-warn/10 px-5 py-4">

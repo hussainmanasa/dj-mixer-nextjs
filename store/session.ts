@@ -6,7 +6,7 @@
 
 import { create } from "zustand";
 import type { FxKind } from "@/lib/audio/fx";
-import { AutoDJ, type AutoDJStatus, type BoothSnapshot } from "@/lib/dj/autodj";
+import { AutoDJ, type AutoDJStatus, type BoothSnapshot, type Preload } from "@/lib/dj/autodj";
 import { DEFAULT_MOOD, resolveMood, targetEnergy } from "@/lib/dj/moods";
 import { rankForRequest, type RequestOption } from "@/lib/dj/selector";
 import { appendSetLog, loadLastSession, saveLastSession } from "@/lib/library/store";
@@ -31,6 +31,12 @@ interface SessionState {
   drop: () => void;
   /** Booth "Start from": where the cued song comes in. */
   setEntry: (choice: EntryChoice) => void;
+  /** Songs loaded into decks before Play (index = deck). Deck A plays first, the others next in order. */
+  preloads: (Preload | null)[];
+  loadDeck: (deck: number, trackId: string) => void;
+  ejectDeck: (deck: number) => void;
+  /** "Start from" for a loaded deck: where Deck A starts, or how a later deck comes in. */
+  setPreloadEntry: (deck: number, choice: EntryChoice) => void;
   /** Fire an effect on the whole mix, on the next beat. */
   fx: (kind: FxKind) => void;
   /** Staff request: `next` replaces the cued track, otherwise it joins the queue. */
@@ -72,6 +78,7 @@ export const useSession = create<SessionState>((set, get) => ({
   status: idle(DEFAULT_MOOD, 2),
   starting: false,
   stopping: false,
+  preloads: [],
   resumeAvailable: false,
 
   async hydrate() {
@@ -129,7 +136,11 @@ export const useSession = create<SessionState>((set, get) => ({
       dj.setMood(get().status.mood);
       // Requests made before the first Play.
       for (const t of get().status.queue) dj.request(t, false);
-      await dj.start();
+      // Decks loaded before Play: Deck A first, then the others in deck order.
+      const loaded = get().preloads.slice(0, deckCount);
+      const preset = { first: loaded[0] ?? undefined, next: loaded.slice(1).filter((p): p is Preload => !!p) };
+      await dj.start(preset);
+      if (dj.isPlaying) set({ preloads: [] });
       persist(get().status.mood, dj.isPlaying, get().status.queue);
     } catch (err) {
       set({ status: { ...get().status, error: err instanceof Error ? err.message : String(err) } });
@@ -174,6 +185,29 @@ export const useSession = create<SessionState>((set, get) => ({
 
   setEntry(choice) {
     dj?.setEntry(choice);
+  },
+
+  loadDeck(deck, trackId) {
+    const track = useLibrary.getState().tracks[trackId];
+    if (!track?.analysis) return;
+    // A song sits on one deck at a time.
+    const preloads = get().preloads.map((p) => (p?.track.id === trackId ? null : p));
+    preloads[deck] = { track, entry: { kind: "auto" } };
+    set({ preloads });
+  },
+
+  ejectDeck(deck) {
+    const preloads = [...get().preloads];
+    preloads[deck] = null;
+    set({ preloads });
+  },
+
+  setPreloadEntry(deck, choice) {
+    const p = get().preloads[deck];
+    if (!p) return;
+    const preloads = [...get().preloads];
+    preloads[deck] = { ...p, entry: choice };
+    set({ preloads });
   },
 
   request(trackId, next) {

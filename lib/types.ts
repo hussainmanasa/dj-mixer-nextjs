@@ -43,6 +43,8 @@ export interface Mood {
   halfTime?: boolean;
   /** On a big tempo jump, rewind (spin back) the outgoing song instead of echoing it out. */
   rewind?: boolean;
+  /** The auto-DJ adds master effects to its transitions (reverb/echo at a swap, riser and filter into drops). */
+  autoFx?: boolean;
 }
 
 /** Result of offline audio analysis (lib/analysis). Times are track seconds. */

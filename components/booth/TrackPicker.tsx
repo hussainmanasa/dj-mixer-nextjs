@@ -9,9 +9,21 @@ import { useSession } from "@/store/session";
  * Staff choose a track. Sorted by how well it fits the mood and the playing
  * track; the auto-DJ still beat-matches it and mixes it in for the mood.
  */
-export function TrackPicker({ next, color, onClose }: { next: boolean; color: string; onClose: () => void }) {
+export function TrackPicker({
+  next,
+  loadDeck,
+  color,
+  onClose,
+}: {
+  next: boolean;
+  /** Load into this deck (before Play) instead of requesting. */
+  loadDeck?: number;
+  color: string;
+  onClose: () => void;
+}) {
   const rankTracks = useSession((s) => s.rankTracks);
   const request = useSession((s) => s.request);
+  const load = useSession((s) => s.loadDeck);
   const moodId = useSession((s) => s.status.mood);
   const mood = useMoods().find((m) => m.id === moodId)!;
   const [query, setQuery] = useState("");
@@ -44,7 +56,7 @@ export function TrackPicker({ next, color, onClose }: { next: boolean; color: st
         <header className="flex items-start justify-between gap-4 border-b border-border px-6 py-5">
           <div>
             <h2 id="picker-title" className="text-xl font-semibold">
-              {next ? "Choose the next track" : "Add a track to the queue"}
+              {loadDeck !== undefined ? `Load a track into Deck ${"ABCD"[loadDeck]}` : next ? "Choose the next track" : "Add a track to the queue"}
             </h2>
             <p className="mt-1 text-sm text-muted">
               Best fit for {mood.name} first. The auto-DJ beat-matches it and mixes it in for the mood.
@@ -71,7 +83,8 @@ export function TrackPicker({ next, color, onClose }: { next: boolean; color: st
                 <button
                   type="button"
                   onClick={() => {
-                    request(o.track.id, next);
+                    if (loadDeck !== undefined) load(loadDeck, o.track.id);
+                    else request(o.track.id, next);
                     onClose();
                   }}
                   className="flex w-full items-center gap-4 rounded-2xl px-3 py-3 text-left hover:bg-surface-2"
