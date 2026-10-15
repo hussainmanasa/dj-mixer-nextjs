@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { canChooseOutputs, listOutputs, testTone, unlockLabels, type OutputDevice } from "@/lib/audio/outputs";
 import { previewIsSeparate, useLibrary } from "@/store/library";
+import { volumeGain } from "@/lib/audio/volume";
 import { useSession } from "@/store/session";
+import { VolumeSlider } from "@/components/VolumeSlider";
 
 /**
  * Where the sound goes: the club speakers (PA) get the mix; a separate
@@ -13,7 +15,8 @@ import { useSession } from "@/store/session";
 export function AudioOutputs() {
   const settings = useLibrary((s) => s.settings);
   const setOutputs = useLibrary((s) => s.setOutputs);
-  const applyOutput = useSession((s) => s.applyOutput);
+  const setVolume = useSession((s) => s.setVolume);
+  const setPreviewVolume = useLibrary((s) => s.setPreviewVolume);
   const [supported, setSupported] = useState(true);
   const [devices, setDevices] = useState<OutputDevice[]>([]);
   const [named, setNamed] = useState(false);
@@ -75,10 +78,8 @@ export function AudioOutputs() {
           value={settings.mainOutput}
           options={options}
           missing={missing(settings.mainOutput)}
-          onChange={async (id) => {
-            await setOutputs({ mainOutput: id });
-            await applyOutput();
-          }}
+          onChange={(id) => setOutputs({ mainOutput: id })}
+          volume={{ label: "Club speakers", value: settings.volume, set: setVolume }}
         />
         <OutputChoice
           label="Preview & Cue (headphones)"
@@ -88,6 +89,7 @@ export function AudioOutputs() {
           selected={settings.previewOutput === null ? "none" : settings.previewOutput}
           missing={missing(settings.previewOutput)}
           onChange={(id) => setOutputs({ previewOutput: id === "none" ? null : id })}
+          volume={{ label: "Headphones", value: settings.previewVolume, set: setPreviewVolume }}
         />
       </div>
 
@@ -113,6 +115,7 @@ function OutputChoice({
   options,
   missing,
   onChange,
+  volume,
 }: {
   label: string;
   hint: string;
@@ -121,6 +124,8 @@ function OutputChoice({
   options: OutputDevice[];
   missing: boolean;
   onChange: (id: string) => void;
+  /** This output's volume slider (the same setting as on the booth). */
+  volume: { label: string; value: number; set: (v: number) => void };
 }) {
   return (
     <div>
@@ -141,7 +146,10 @@ function OutputChoice({
       </label>
       <p className="mt-1 text-xs text-muted">{hint}</p>
       {missing && <p className="mt-1 text-xs text-warn">That device isn&apos;t connected — the default output is used until it is.</p>}
-      <button type="button" className="btn mt-2" onClick={() => void testTone(value)} aria-label={`Test ${label}`}>
+      <div className="mt-3">
+        <VolumeSlider label="Volume" name={`${volume.label} volume`} value={volume.value} onChange={volume.set} />
+      </div>
+      <button type="button" className="btn mt-2" onClick={() => void testTone(value, volumeGain(volume.value))} aria-label={`Test ${label}`}>
         Test sound
       </button>
     </div>

@@ -6,7 +6,7 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import { analyzeFile } from "@/lib/analysis/analyze";
-import { GridPreview } from "@/lib/library/preview";
+import { GridPreview, sharedPreview } from "@/lib/library/preview";
 import { ANALYSIS_VERSION } from "@/lib/analysis/bpm";
 import { ensurePermission, fileId, getFileAt, isSupported, pickFolder, trackFromFile, walk } from "@/lib/library/scan";
 import {
@@ -42,8 +42,10 @@ interface LibraryState {
   retryFailed: () => Promise<void>;
   setDeckCount: (n: number) => Promise<void>;
   setKeyLock: (on: boolean) => Promise<void>;
-  /** Master volume (0..1), saved so it survives a reload. Applied to the mix by `useSession.setVolume`. */
+  /** Club speakers' master volume (0..1), saved so it survives a reload. Applied to the mix by `useSession.setVolume`. */
   setVolume: (volume: number) => void;
+  /** Headphones' volume (previews and Cue, 0..1), saved and applied at once. */
+  setPreviewVolume: (volume: number) => void;
   /** Choose the club speakers (mix) and the preview / cue output. */
   setOutputs: (outputs: { mainOutput?: string; previewOutput?: string | null }) => Promise<void>;
   /** Save an edited mood (only the fields that differ from the preset are stored); null resets it. */
@@ -70,13 +72,31 @@ const sessionFiles = new Map<string, File>();
 const SESSION_PREFIX = "session:";
 
 /** Persist only folder-backed tracks; session-file tracks vanish on reload. */
-function persistTracks(tracks: Record<string, Track>): Promise<void> {
+/**
+ * Other tabs of the app (e.g. the Library open beside the booth) hear about
+ * every saved change and reload it, so nothing needs a refresh.
+ */
+const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("ai-dj-mixer") : null;
+
+async function persistTracks(tracks: Record<string, Track>): Promise<void> {
   const keep: Record<string, Track> = {};
   for (const t of Object.values(tracks)) if (!t.path.startsWith(SESSION_PREFIX)) keep[t.id] = t;
-  return saveTracks(keep);
+  await saveTracks(keep);
+  channel?.postMessage("tracks");
+}
+
+async function persistSettings(settings: Settings): Promise<void> {
+  await saveSettings(settings);
+  channel?.postMessage("settings");
 }
 
 let volumeSave: ReturnType<typeof setTimeout> | undefined;
+
+/** A slider sends many changes: save the settings once it settles. */
+function saveSoon() {
+  clearTimeout(volumeSave);
+  volumeSave = setTimeout(() => void persistSettings(useLibrary.getState().settings), 300);
+}
 
 export const useLibrary = create<LibraryState>((set, get) => ({
   hydrated: false,
@@ -96,6 +116,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     // Tracks interrupted mid-analysis go back to pending.
     for (const t of Object.values(tracks)) if (t.status === "pending") t.analysis = null;
     GridPreview.sinkId = settings.previewOutput ?? "";
+    sharedPreview.setVolume(settings.previewVolume);
     set({ hydrated: true, folder: folder ?? null, folderState, tracks, settings });
   },
 
@@ -191,28 +212,32 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     const deckCount = Math.max(MIN_DECKS, Math.min(MAX_DECKS, Math.round(n)));
     const settings = { ...get().settings, deckCount };
     set({ settings });
-    await saveSettings(settings);
+    await persistSettings(settings);
   },
 
   async setOutputs(outputs) {
     const settings = { ...get().settings, ...outputs };
     set({ settings });
     GridPreview.sinkId = settings.previewOutput ?? "";
-    await saveSettings(settings);
+    await persistSettings(settings);
   },
 
   async setKeyLock(on) {
     const settings = { ...get().settings, keyLock: on };
     set({ settings });
-    await saveSettings(settings);
+    await persistSettings(settings);
   },
 
   setVolume(volume) {
-    const settings = { ...get().settings, volume: Math.max(0, Math.min(1, volume)) };
-    set({ settings });
-    // A slider sends many changes: save once it settles.
-    clearTimeout(volumeSave);
-    volumeSave = setTimeout(() => void saveSettings(useLibrary.getState().settings), 300);
+    set({ settings: { ...get().settings, volume: Math.max(0, Math.min(1, volume)) } });
+    saveSoon();
+  },
+
+  setPreviewVolume(volume) {
+    const previewVolume = Math.max(0, Math.min(1, volume));
+    set({ settings: { ...get().settings, previewVolume } });
+    sharedPreview.setVolume(previewVolume);
+    saveSoon();
   },
 
   async saveMood(mood, id) {
@@ -229,7 +254,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     }
     const settings = { ...get().settings, moods };
     set({ settings });
-    await saveSettings(settings);
+    await persistSettings(settings);
   },
 
   async addSessionFiles(files) {
@@ -358,4 +383,21 @@ export function previewIsSeparate(s: { mainOutput: string; previewOutput: string
 
 export function readyTracks(tracks: Record<string, Track>): Track[] {
   return Object.values(tracks).filter((t) => t.status === "ready" && t.analysis);
+}
+
+// Another tab saved settings or track edits: take them over (this tab's session-only files stay).
+if (channel) {
+  channel.onmessage = async (e: MessageEvent) => {
+    if (!useLibrary.getState().hydrated) return;
+    if (e.data === "settings") {
+      const settings = await loadSettings();
+      GridPreview.sinkId = settings.previewOutput ?? "";
+      sharedPreview.setVolume(settings.previewVolume);
+      useLibrary.setState({ settings });
+    } else if (e.data === "tracks") {
+      const stored = await loadTracks();
+      const session = Object.values(useLibrary.getState().tracks).filter((t) => t.path.startsWith(SESSION_PREFIX));
+      useLibrary.setState({ tracks: { ...stored, ...Object.fromEntries(session.map((t) => [t.id, t])) } });
+    }
+  };
 }

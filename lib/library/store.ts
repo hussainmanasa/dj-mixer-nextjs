@@ -29,6 +29,8 @@ export interface Settings {
   previewOutput: string | null;
   /** Master volume on the club speakers, 0..1 (the booth's volume slider). */
   volume: number;
+  /** Volume of previews and Cue on the preview output (headphones), 0..1. */
+  previewVolume: number;
 }
 
 export interface LastSession {
@@ -39,7 +41,7 @@ export interface LastSession {
   updatedAt: number;
 }
 
-export const DEFAULT_SETTINGS: Settings = { deckCount: 2, keyLock: false, moods: {}, mainOutput: "", previewOutput: null, volume: 1 };
+export const DEFAULT_SETTINGS: Settings = { deckCount: 2, keyLock: false, moods: {}, mainOutput: "", previewOutput: null, volume: 1, previewVolume: 1 };
 
 export async function loadFolderHandle(): Promise<FileSystemDirectoryHandle | undefined> {
   return db ? get<FileSystemDirectoryHandle>(KEYS.folder, db) : undefined;
@@ -59,6 +61,15 @@ export async function loadTracks(): Promise<Record<string, Track>> {
 
 export async function saveTracks(tracks: Record<string, Track>): Promise<void> {
   if (db) await set(KEYS.tracks, tracks, db);
+}
+
+/** A song's cover art thumbnail; `false` once it's known to have none. */
+export async function loadArt(trackId: string): Promise<Blob | false | undefined> {
+  return db ? get<Blob | false>(`art:${trackId}`, db) : undefined;
+}
+
+export async function saveArt(trackId: string, art: Blob | false): Promise<void> {
+  if (db) await set(`art:${trackId}`, art, db);
 }
 
 export async function loadSettings(): Promise<Settings> {

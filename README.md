@@ -34,7 +34,18 @@ Open http://localhost:3000, then:
    that its start. The picker's **▶** previews a song before you choose it. On a loaded or cued deck you can
    also turn the **jog wheel** (drag, scroll, or click it and use the arrow keys) to move its start point — it
    scratches on the club speakers as you turn it (during a set, over the music).
-   **Volume** under the level meter sets the club speakers' master volume (saved; headphones aren't affected).
+   **⏸ / ▶ on each deck:** ⏸ on the song on air pauses it — the club hears nothing until you press **▶ Resume**,
+   which carries on from the same spot (or **▶ Play now** on the cued deck starts that song instead). During a
+   mix, ⏸ stops just that deck and the other song carries on. The **jog wheel on the song on air** works like a record:
+   touch it and the song stops under your hand, turn it to scratch, let go and it plays on from there. On a paused
+   song, turning it moves the spot ▶ will play from. (Not while two songs are mixing.) Flick the wheel **backwards fast** and let go
+   for a **spinback**: the song spins back and the cued song drops in.
+   **Tempo slider** beside each playing / cued deck's wheel (±8%): on the song on air it changes the tempo at once
+   (the auto-DJ re-times the next mix); on the cued song it's the tempo it settles at after its mix. Double-click
+   it, or press its % button, to go back to the song's own tempo. The wheel's centre shows the song's cover art. ▶ **Play now** on the cued deck mixes it in on the
+   next phrase. The auto-DJ keeps running throughout — no need to press Stop.
+   **Volume** under the level meter has two sliders: **Club speakers** (the mix) and **Headphones** (Cue and
+   previews). Both are saved and also sit under each output in Library → Audio outputs.
 
 ## Running at a venue
 
@@ -57,7 +68,8 @@ the venue's public performance licences current (in India, for example, PPL and 
 
 ## Admin
 
-- **Library** — folder, analysis, deck count and key lock (beta). The track table flags problems
+- **Library** — folder, analysis, deck count and key lock (beta). Every setting applies straight away, also
+  during a set and from another browser tab — no refresh or Stop needed. The track table flags problems
   (*Needs attention*); **Edit** a track to mark it *Favourite* / *Never play*, add it to crates, fix its beat grid
   (listen with clicks), its drop detection or its key.
 - **Moods** — tune each mood's tempo, energy, blend length, how long tracks play, drop swaps, crates, the set

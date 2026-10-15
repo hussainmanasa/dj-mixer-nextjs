@@ -6,6 +6,7 @@
 // serves the track editor, the booth's Cue and the picker. Client-only.
 
 import { routeTo } from "@/lib/audio/outputs";
+import { volumeGain } from "@/lib/audio/volume";
 
 export interface Grid {
   bpm: number;
@@ -26,6 +27,9 @@ export class GridPreview {
   static sinkId = "";
 
   private ctx: AudioContext | null = null;
+  /** Previews' volume (0..1, the headphones' slider) and the gain every preview sound goes through. */
+  private volume = 1;
+  private out: GainNode | null = null;
   private cache: { file: Blob; buffer: Promise<AudioBuffer> } | null = null;
   private nodes: AudioScheduledSourceNode[] = [];
   private clock: { t0: number; from: number; jump?: { at: number; to: number } } | null = null;
@@ -44,7 +48,7 @@ export class GridPreview {
     const buffer = await this.decoded(file);
     const t0 = ctx.currentTime + 0.1;
     const out = new GainNode(ctx, { gain: 0.8 });
-    out.connect(ctx.destination);
+    out.connect(this.out!);
 
     const segments: { when: number; offset: number; length: number }[] = [];
     if (opts.jump) {
@@ -81,7 +85,7 @@ export class GridPreview {
         const env = new GainNode(ctx, { gain: 0 });
         env.gain.setValueAtTime(downbeat ? 0.5 : 0.3, at);
         env.gain.exponentialRampToValueAtTime(0.001, at + 0.05);
-        osc.connect(env).connect(ctx.destination);
+        osc.connect(env).connect(this.out!);
         osc.start(at);
         osc.stop(at + 0.06);
         this.nodes.push(osc);
@@ -92,6 +96,10 @@ export class GridPreview {
   /** The preview context, on the preview output and running. */
   private async context(): Promise<AudioContext> {
     this.ctx ??= new AudioContext({ latencyHint: "interactive" });
+    if (!this.out) {
+      this.out = new GainNode(this.ctx, { gain: volumeGain(this.volume) });
+      this.out.connect(this.ctx.destination);
+    }
     await routeTo(this.ctx, GridPreview.sinkId);
     await this.ctx.resume();
     return this.ctx;
@@ -115,6 +123,15 @@ export class GridPreview {
     return from + elapsed;
   }
 
+  /** Previews' volume, 0..1 (see `volumeGain`); applies at once, gliding so it never clicks. */
+  setVolume(volume: number): void {
+    this.volume = volume;
+    if (this.out && this.ctx) {
+      this.out.gain.cancelScheduledValues(this.ctx.currentTime);
+      this.out.gain.setTargetAtTime(volumeGain(volume), this.ctx.currentTime, 0.03);
+    }
+  }
+
   stop(): void {
     for (const n of this.nodes) {
       try {
@@ -130,6 +147,7 @@ export class GridPreview {
   async close(): Promise<void> {
     this.stop();
     this.cache = null;
+    this.out = null;
     await this.ctx?.close();
     this.ctx = null;
   }

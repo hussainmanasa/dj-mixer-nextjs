@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { VolumeSlider } from "@/components/VolumeSlider";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { SCHEDULE_MARGIN, STOP_FADE_SECONDS, type AutoDJStatus } from "@/lib/dj/autodj";
 import { cuePlan, firstStart, resolveEntry } from "@/lib/dj/cues";
@@ -76,7 +77,8 @@ export function Booth() {
   const mood = moods.find((m) => m.id === status.mood)!;
   const color = MOOD_COLOR[status.mood];
   // On air and not fading out: the only time Drop, effects and track choice make sense.
-  const live = status.playing && !stopping;
+  // Paused: Drop, Layer and effects wait for ▶.
+  const live = status.playing && !stopping && status.paused === null;
   const deckCount = status.playing ? status.deckCount : settingsDecks;
   const decks = Array.from({ length: deckCount }, (_, i) => {
     // Before Play, staff can load a song into any deck (Deck A plays first, the rest next in order).
@@ -125,6 +127,11 @@ export function Booth() {
         onChoose={choose}
         keyLock={status.playing && status.keyLock}
         entry={role === "incoming" && status.next && !stopping ? { choice: status.next.entry, startAt: status.next.startAt, set: setEntry } : undefined}
+        transport={
+          status.playing && !stopping
+            ? { setPaused: status.paused !== null, thisPaused: status.paused === i, tempo: role === "incoming" ? status.next?.tempo : undefined }
+            : undefined
+        }
         cue={
           role === "incoming" && status.next && !stopping
             ? { plan: cuePlan(status.next.track, status.next.entry, false), blocked: !previewSeparate }
@@ -173,6 +180,16 @@ export function Booth() {
       {resumeAvailable && !status.playing && canPlay && (
         <div className="flex items-center justify-between rounded-xl border border-warn/40 bg-warn/10 px-5 py-4">
           <p>The last set was interrupted. Press play to resume in {mood.name}.</p>
+        </div>
+      )}
+
+      {status.paused !== null && !status.holding && (
+        <div role="status" className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 rounded-2xl border-2 border-warn bg-warn/15 px-5 py-4 text-center">
+          <p className="text-2xl font-bold text-warn">Paused</p>
+          <p className="text-lg">
+            The club hears nothing. Press <strong>▶ Resume</strong> on Deck {"ABCD"[status.paused]}, or <strong>▶ Play now</strong> on the
+            cued deck.
+          </p>
         </div>
       )}
 
@@ -450,7 +467,11 @@ function NextMix({ status, color }: { status: AutoDJStatus; color: string }) {
   const progress = useRef<HTMLDivElement>(null);
   useBoothFrame((snap) => {
     const mix = snap?.mix;
-    if (!mix) return;
+    if (!mix) {
+      setText(when.current, "");
+      if (progress.current) progress.current.style.transform = "scaleX(0)";
+      return;
+    }
     if (snap.layering) {
       setText(when.current, "layered · Drop to swap");
       if (progress.current) progress.current.style.transform = "scaleX(0)";
@@ -483,7 +504,7 @@ function NextMix({ status, color }: { status: AutoDJStatus; color: string }) {
           </p>
           <p className="truncate text-sm text-muted">{status.next.track.artist || "Unknown artist"}</p>
           <p className="mt-2 flex justify-between gap-2 font-mono text-xs text-muted">
-            <span>{TRANSITION_LABEL[status.next.transition]}</span>
+            <span>{status.paused !== null ? "When you press ▶" : TRANSITION_LABEL[status.next.transition]}</span>
             <span ref={when} className="tabular-nums" />
           </p>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-2">
@@ -532,33 +553,24 @@ function Queue({ status, enabled, onAdd }: { status: AutoDJStatus; enabled: bool
   );
 }
 
-/** Master volume on the club speakers (not the headphones). Saved, so it survives a reload. */
+/** Two volumes: the club speakers (the mix) and the headphones (Cue and previews). Both are saved. */
 function VolumeControl({ color, playing }: { color: string; playing: boolean }) {
   const volume = useLibrary((s) => s.settings.volume);
+  const previewVolume = useLibrary((s) => s.settings.previewVolume);
   const setVolume = useSession((s) => s.setVolume);
-  const percent = Math.round(volume * 100);
+  const setPreviewVolume = useLibrary((s) => s.setPreviewVolume);
   return (
-    <div className="flex w-56 flex-col gap-1">
-      <label htmlFor="master-volume" className="flex items-baseline justify-between text-sm font-medium uppercase tracking-wider text-muted">
-        Volume
-        <span className="font-mono text-base text-foreground" aria-hidden>
-          {percent}%
-        </span>
-      </label>
-      <input
-        id="master-volume"
-        type="range"
-        min={0}
-        max={100}
-        step={1}
-        value={percent}
-        aria-valuetext={`${percent}%`}
-        onChange={(e) => setVolume(Number(e.target.value) / 100)}
-        className="h-10 w-full cursor-pointer"
-        style={{ accentColor: color }}
+    <section aria-label="Volume" className="flex w-56 flex-col gap-2">
+      <h2 className="text-sm font-medium uppercase tracking-wider text-muted">Volume</h2>
+      <VolumeSlider
+        label="Club speakers"
+        value={volume}
+        onChange={setVolume}
+        color={color}
+        warning={playing ? "Volume is at 0 — the club hears nothing" : undefined}
       />
-      {playing && percent === 0 && <p className="text-center text-sm text-warn">Volume is at 0 — the club hears nothing</p>}
-    </div>
+      <VolumeSlider label="Headphones" value={previewVolume} onChange={setPreviewVolume} color={color} />
+    </section>
   );
 }
 

@@ -24,7 +24,10 @@ export class AudioEngine {
   readonly volume: GainNode;
   /** The jog wheel's scratch, into the master like a deck. */
   readonly scratch: Scratch;
+  /** 2–4 decks; the count can change while playing (`addDecks` / `removeFreeDecks`). */
   readonly decks: Deck[];
+  /** Key-lock is on for every deck. */
+  private keyLockOn = false;
   private readonly levelBuf: Float32Array<ArrayBuffer>;
   private readonly watchBuf: Float32Array<ArrayBuffer>;
 
@@ -60,12 +63,42 @@ export class AudioEngine {
    */
   outputDelay = 0;
 
-  /** Turn key-lock on or off for every deck (only while stopped). Resolves to the state actually in effect. */
-  async setKeyLock(on: boolean): Promise<boolean> {
+  /**
+   * Turn key-lock on or off for every deck. With `fade` (mid-set) each deck
+   * crossfades to its new route over that many seconds. Resolves to the state
+   * actually in effect.
+   */
+  async setKeyLock(on: boolean, fade = 0): Promise<boolean> {
     const ok = on && (await loadKeyLock(this.ctx));
-    for (const d of this.decks) d.setKeyLock(ok ? createKeyLock(this.ctx) : null);
+    if (ok === this.keyLockOn) return ok;
+    this.keyLockOn = ok;
+    for (const d of this.decks) d.setKeyLock(ok ? createKeyLock(this.ctx) : null, fade);
     this.outputDelay = ok ? KEYLOCK_DELAY_SAMPLES / this.ctx.sampleRate : 0;
     return ok;
+  }
+
+  /** Add decks up to `count` (also while playing). Returns the new ones. */
+  addDecks(count: number): Deck[] {
+    const added: Deck[] = [];
+    while (this.decks.length < Math.min(MAX_DECKS, count)) {
+      const d = new Deck(this.ctx, this.master, this.decks.length);
+      if (this.keyLockOn) d.setKeyLock(createKeyLock(this.ctx));
+      this.decks.push(d);
+      added.push(d);
+    }
+    return added;
+  }
+
+  /** Remove decks from the end down to `count`, stopping at one that's in use. True once there are `count`. */
+  removeFreeDecks(count: number, inUse: (Deck | null | undefined)[]): boolean {
+    const n = Math.max(MIN_DECKS, count);
+    while (this.decks.length > n) {
+      const last = this.decks[this.decks.length - 1];
+      if (last.isPlaying || inUse.includes(last)) break;
+      last.dispose();
+      this.decks.pop();
+    }
+    return this.decks.length <= n;
   }
 
   /** The chosen output for the mix ("" = system default) and whether it is actually in use. */
@@ -133,9 +166,9 @@ export class AudioEngine {
     return this.ctx.decodeAudioData(bytes);
   }
 
-  /** A deck that is not playing, excluding the given ones. */
-  freeDeck(exclude: Deck[] = []): Deck | null {
-    return this.decks.find((d) => !d.isPlaying && !exclude.includes(d)) ?? null;
+  /** A deck that is not playing, excluding the given ones (and any at index `limit` or above). */
+  freeDeck(exclude: Deck[] = [], limit = Infinity): Deck | null {
+    return this.decks.find((d) => d.index < limit && !d.isPlaying && !exclude.includes(d)) ?? null;
   }
 
   /** Master RMS level, 0..1. */

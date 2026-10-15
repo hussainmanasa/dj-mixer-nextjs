@@ -59,7 +59,7 @@ export async function routeTo(ctx: AudioContext, deviceId: string): Promise<bool
 }
 
 /** A short two-note tone on a device, to check which speakers it is. */
-export async function testTone(deviceId: string): Promise<boolean> {
+export async function testTone(deviceId: string, gain = 1): Promise<boolean> {
   const ctx = new AudioContext();
   const ok = await routeTo(ctx, deviceId);
   await ctx.resume();
@@ -71,7 +71,7 @@ export async function testTone(deviceId: string): Promise<boolean> {
     const osc = new OscillatorNode(ctx, { frequency: freq });
     const env = new GainNode(ctx, { gain: 0 });
     env.gain.setValueAtTime(0, t + at);
-    env.gain.linearRampToValueAtTime(0.3, t + at + 0.02);
+    env.gain.linearRampToValueAtTime(0.3 * gain, t + at + 0.02);
     env.gain.linearRampToValueAtTime(0, t + at + 0.22);
     osc.connect(env).connect(ctx.destination);
     osc.start(t + at);

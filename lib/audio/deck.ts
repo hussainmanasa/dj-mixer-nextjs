@@ -7,7 +7,7 @@
 
 import { trimDb } from "@/lib/analysis/loudness";
 import type { Track } from "@/lib/types";
-import { PlaybackTimeline, type Jump } from "./timeline";
+import { PlaybackTimeline, rebaseTimeline, type Jump } from "./timeline";
 
 /** Overlap (s) of the two sources at a jump, so the cut doesn't click. */
 const JUMP_XFADE = 0.01;
@@ -33,6 +33,8 @@ export class Deck {
   readonly out: GainNode;
   private readonly destination: AudioNode;
   private keyLock: AudioWorkletNode | null = null;
+  /** out → [key-lock] → this gain → master. A second route fades in when key-lock is switched mid-set. */
+  private route: GainNode;
 
   private source: AudioBufferSourceNode | null = null;
   /** Before a scheduled jump: the source playing the part up to the jump (e.g. a dialogue). */
@@ -51,7 +53,7 @@ export class Deck {
     this.index = index;
     this.destination = destination;
     this.out = new GainNode(ctx, { gain: 1 });
-    this.out.connect(destination);
+    this.route = this.connectRoute(null, 1);
     this.trim = new GainNode(ctx, { gain: 1 });
     this.low = new BiquadFilterNode(ctx, { type: "lowshelf", frequency: 200, gain: 0 });
     this.mid = new BiquadFilterNode(ctx, { type: "peaking", frequency: 1000, Q: 0.7, gain: 0 });
@@ -70,13 +72,57 @@ export class Deck {
     this.echoDelay.connect(this.echoFeedback).connect(this.echoDelay);
   }
 
-  /** Route the deck through a key-lock node (or straight to the master with null). Only while stopped. */
-  setKeyLock(node: AudioWorkletNode | null): void {
+  private connectRoute(node: AudioWorkletNode | null, gain: number): GainNode {
+    const g = new GainNode(this.ctx, { gain });
+    if (node) this.out.connect(node).connect(g);
+    else this.out.connect(g);
+    g.connect(this.destination);
+    return g;
+  }
+
+  /**
+   * Route the deck through a key-lock node (or straight to the master with
+   * null). With `fade` (mid-set) the new route crossfades in over that many
+   * seconds; the key-lock route is KEYLOCK_DELAY later, so the switch smears
+   * for a moment. The new node's pitch picks up the deck's current tempo and
+   * any glide still under way.
+   */
+  setKeyLock(node: AudioWorkletNode | null, fade = 0): void {
+    const old = { gain: this.route, node: this.keyLock };
+    const now = this.ctx.currentTime;
+    this.keyLock = node;
+    this.route = this.connectRoute(node, fade > 0 ? 0 : 1);
+    const tl = this.timeline;
+    const pitch = this.pitch;
+    if (pitch && tl) {
+      pitch.setValueAtTime(1 / tl.rateAt(now), now);
+      const r = tl.ramp;
+      if (r && r.t1 > now) {
+        const from = Math.max(now, r.t0);
+        pitch.setValueAtTime(1 / tl.rateAt(from), from);
+        pitch.linearRampToValueAtTime(1 / r.r1, r.t1);
+      }
+    }
+    const disconnect = () => {
+      this.out.disconnect(old.node ?? old.gain);
+      old.node?.disconnect();
+      old.gain.disconnect();
+    };
+    if (fade <= 0) return disconnect();
+    this.route.gain.setValueAtTime(0, now);
+    this.route.gain.linearRampToValueAtTime(1, now + fade);
+    old.gain.gain.setValueAtTime(1, now);
+    old.gain.gain.linearRampToValueAtTime(0, now + fade);
+    setTimeout(disconnect, (fade + 0.2) * 1000);
+  }
+
+  /** Take the deck out of the graph for good (the engine removed it). */
+  dispose(): void {
+    this.unload();
     this.out.disconnect();
     this.keyLock?.disconnect();
-    this.keyLock = node;
-    if (node) this.out.connect(node).connect(this.destination);
-    else this.out.connect(this.destination);
+    this.route.disconnect();
+    this.echoDelay.disconnect();
   }
 
   /** Key-lock pitch follows 1 / playbackRate so the track keeps its key. */
@@ -163,6 +209,20 @@ export class Deck {
     this.timeline.ramp = { t0, t1, r0: from, r1: to };
   }
 
+  /**
+   * Staff moved the tempo slider: glide to `to` over `seconds` from now,
+   * replacing any glide still scheduled (the timeline is rebased first, since
+   * it holds only one ramp).
+   */
+  changeRate(to: number, seconds = 0.15): void {
+    if (!this.source || !this.timeline) return;
+    const now = this.ctx.currentTime;
+    for (const src of [this.source, this.preJump]) src?.playbackRate.cancelAndHoldAtTime(now);
+    this.pitch?.cancelAndHoldAtTime(now);
+    this.timeline = rebaseTimeline(this.timeline, now);
+    this.rampRate(now, now + seconds, to);
+  }
+
   stopAt(when: number): void {
     if (!this.source) return;
     this.stopping = true;
@@ -213,10 +273,11 @@ export class Deck {
    * of that stretch. It goes in after the fader (the caller cuts the fader at
    * `at`), so it's heard while the track itself stops.
    */
-  rewind(at: number, seconds = REWIND_SECONDS): void {
+  rewind(at: number, seconds = REWIND_SECONDS, from?: number): void {
     const buf = this.buffer;
-    if (!buf || !this.timeline) return;
-    const pos = this.timeline.positionAt(at);
+    // `from`: a track position to spin back from (a song already stopped, e.g. held on the jog wheel).
+    const pos = from ?? this.timeline?.positionAt(at);
+    if (!buf || pos === undefined) return;
     // 1× → 4× exponentially over `seconds` covers ~2.2 s of audio; take a little more.
     const span = Math.min(pos, 3);
     const n = Math.floor(span * buf.sampleRate);
@@ -278,6 +339,44 @@ export class Deck {
     this.filter.frequency.setValueAtTime(1000, now);
     this.fader.gain.setValueAtTime(gain, now);
     this.echoSend.gain.setValueAtTime(0, now);
+  }
+
+  /**
+   * Fade out over `seconds` from wherever the fader is (its automation is
+   * dropped) and stop just after: a pause without a click. The echo send
+   * closes too, so only an echo tail already ringing carries on.
+   */
+  fadeOutAndStop(seconds: number): void {
+    const now = this.ctx.currentTime;
+    for (const param of [this.fader.gain, this.echoSend.gain]) {
+      param.cancelAndHoldAtTime(now);
+      param.linearRampToValueAtTime(0, now + seconds);
+    }
+    this.stopAt(now + seconds + 0.01);
+  }
+
+  /**
+   * Glide every control back to neutral over `seconds` (fader to `gain`),
+   * from wherever its transition automation has got to. A high- or low-pass
+   * filter glides to an inaudible cut-off, so `clearFilter()` is silent after.
+   */
+  easeToNeutral(seconds: number, gain = 1): void {
+    const now = this.ctx.currentTime;
+    const end = now + seconds;
+    for (const [param, to] of [
+      [this.low.gain, 0],
+      [this.mid.gain, 0],
+      [this.high.gain, 0],
+      [this.fader.gain, gain],
+      [this.echoSend.gain, 0],
+    ] as const) {
+      param.cancelAndHoldAtTime(now);
+      param.linearRampToValueAtTime(to, end);
+    }
+    const f = this.filter.frequency;
+    f.cancelAndHoldAtTime(now);
+    if (this.filter.type === "highpass") f.exponentialRampToValueAtTime(10, end);
+    else if (this.filter.type === "lowpass") f.exponentialRampToValueAtTime(20000, end);
   }
 
   /**

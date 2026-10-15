@@ -130,7 +130,7 @@ export function LibraryManager() {
             ))}
           </div>
           <p className="mt-3 text-sm text-muted">{DECK_HELP[s.settings.deckCount]}</p>
-          <p className="mt-1 text-xs text-muted">Takes effect the next time Play is pressed.</p>
+          <p className="mt-1 text-xs text-muted">Applies straight away, also during a set: a deck that&apos;s playing or cued is removed once it&apos;s free.</p>
 
           <h2 className="mt-6 text-sm font-medium uppercase tracking-wider text-muted">Key lock (beta)</h2>
           <label className="mt-3 flex cursor-pointer items-center gap-3">
@@ -146,7 +146,7 @@ export function LibraryManager() {
             Without it, a track sped up 5% also plays 5% higher. With it, the key stays put, at the cost of a slightly
             softer sound on big tempo changes. Listen on the venue system before using it on a busy night.
           </p>
-          <p className="mt-1 text-xs text-muted">Takes effect the next time Play is pressed.</p>
+          <p className="mt-1 text-xs text-muted">Switches straight away, also during a set (a very short smear as it switches).</p>
         </div>
       </section>
 

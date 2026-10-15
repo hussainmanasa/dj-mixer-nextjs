@@ -28,13 +28,22 @@ Full product plan: https://claude.ai/code/artifact/903692c7-9f12-49a9-9de1-5a82b
    **Layer** (two songs together until Drop swaps them; only songs that match in tempo and key), and **Cue /
    preview** on a separate output (headphones): Cue a loaded or cued deck and "Set start here", preview songs in
    the picker. Cue never touches the mix. Also the **jog wheel on a loaded or cued deck** sets its start point
-   (drag, scroll, keys); the deck on air stays display-only — scrubbing it would jump the music the crowd
-   hears and break the auto-DJ's beat-matching, which is timed against its position. From 14 Oct 2026 (owner):
+   (drag, scroll, keys). (Originally the deck on air stayed display-only; see the jog decision below.) From 14 Oct 2026 (owner):
    turning that jog wheel **scratches on the club speakers** (not the headphones), also over the music during a
-   set, and the booth has a **master volume** for the club speakers.
+   set, and the booth has **separate volumes for the club speakers and the headphones** (preview output).
+   Also from 14 Oct 2026 (owner): **⏸ / ▶ on the on-air and cued decks** — pausing the song on air gives
+   silence until ▶ (it resumes where it stopped; no automatic resume); during a mix ⏸ stops only that side and
+   the other song carries on; ▶ on the cued deck brings it in on the next phrase. These go through `AutoDJ`
+   like every other action (it still beat-matches and times the mix); there's still no seek, crossfader or
+   per-deck fader. And (owner, 14 Oct 2026) the **jog wheel on the song on air**, playing or paused: a hand on
+   it stops the song like a record and scratches it, letting go plays on from there; on a paused song it moves
+   the paused spot. Not during a mix (it would throw both songs out of time).
+   From 15 Oct 2026 (owner): a **tempo slider on the on-air and cued decks** (±8%, through `AutoDJ.setDeckTempo`,
+   which re-times the next mix), a **spinback** (flick the on-air jog backwards fast: the song spins back and the
+   cued song drops in), and the song's **cover art** on the jog wheel.
    Every action goes through `AutoDJ`: it still beat-matches, chooses the transition, times it on the grid
-   and steers back to the mood. Do not add manual decks, crossfader, per-deck EQ/faders, jog control,
-   skip/seek, energy slider or tempo controls, and never let UI write to deck automation directly.
+   and steers back to the mood. Do not add manual decks, crossfader, per-deck EQ/faders, skip/seek or an
+   energy slider, and never let UI write to deck automation directly.
    Admin features live on `/library` and `/moods`.
 3. **Mood changes only when staff pick a new one.** Never switch moods on a schedule.
    A mood change must never cut the music: re-plan only transitions that haven't started; close moods ease
@@ -44,7 +53,9 @@ Full product plan: https://claude.ai/code/artifact/903692c7-9f12-49a9-9de1-5a82b
    runs only in a server route, returns schema-validated JSON, has a short timeout, falls back to the rules,
    and is never in the audio path.
 6. **The music must never stop.** Keep every fail-safe working: silence watchdog, early-end recovery,
-   decode-failure skip, standby deck (3+ decks), auto-resume after reload.
+   decode-failure skip, standby deck (3+ decks), auto-resume after reload. The one exception is a staff pause
+   (decision 2): the silence is deliberate, so the watchdog and early-end recovery stand down until ▶, and a
+   reload while paused doesn't auto-resume.
 7. **Licensing:** no AGPL/GPL dependencies (e.g. essentia.js is AGPL — don't add it). Prefer MIT/Apache/BSD.
 
 ## Architecture
@@ -56,8 +67,11 @@ app/
   (admin)/moods/page.tsx      mood editor (presets + admin edits)
   (admin)/history/page.tsx    set log by night, CSV export
   manifest.ts                 PWA manifest (kiosk install)
+  icon.svg · apple-icon.png · favicon.ico   tab / home-screen icon (a record in the accent colours), drawn by
+                              scripts/make-icons.mjs with public/icons/* for the manifest
 components/                   UI (client components)
   AppShell.tsx                service worker registration + offline banner (root layout)
+  VolumeSlider.tsx            volume slider (booth and Library → Audio outputs)
   booth/                      Booth.tsx (layout, Drop, queue) · DeckPanel · JogWheel · TrackOverview · FxPad ·
                               TrackPicker · frame.ts (per-frame loop)
   library/                    LibraryManager · TrackTable (filters, issues) · TrackEditor (flags, crates, fixes)
@@ -85,7 +99,7 @@ lib/
     engine.ts                 client: N decks + scratch → master → effects → limiter → analysers (meter, watchdog)
                               → master volume → out
     scratch.ts                client: jog-wheel scratch on the engine (loads public/worklets/scrub.js)
-    volume.ts                 PURE: master volume slider → gain
+    volume.ts                 PURE: volume slider → gain (club speakers and headphones)
     transitions.ts            client: blend, filterSweep, echoOut, cut, dropIn, dialogueIn automation
     fx.ts                     client: staff effects on the master (echo, filter, reverb, noise riser)
     keylock.ts                client: loads public/worklets/keylock.js (phase-vocoder pitch corrector)
@@ -95,6 +109,7 @@ lib/
     store.ts                  client: IndexedDB persistence (idb-keyval): tracks, settings, session, set log
     setlog.ts · issues.ts     PURE: nights + CSV for licence reports; library health checks
     preview.ts                client: the shared preview player (editor, booth Cue, picker) on the preview output
+    artwork.ts                client: cover art from tags → 320 px WebP thumbnail, cached in IndexedDB (`art:<id>`)
 store/
   library.ts                  zustand: tracks, folder, settings, analysis queue
   session.ts                  zustand: owns the single AutoDJ, mirrors its status
@@ -168,7 +183,7 @@ pitch by `1/playbackRate` (phase vocoder, N = 2048, hop N/8, phase reset on tran
 pitch 1). Its delay is a constant `KEYLOCK_DELAY_SAMPLES` on every deck, so decks stay aligned; it sits after
 the faders so transition automation still lands on the beat. `engine.outputDelay` is that delay: the booth
 display and master effects add it (what the room hears lags the deck clock). Falls back to no key-lock if the
-worklet can't load. Takes effect at the next Play. The booth shows a **KEY LOCK** badge on each deck only when
+worklet can't load. Switches live, also mid-set (see "Live settings"). The booth shows a **KEY LOCK** badge on each deck only when
 it is actually running (`AutoDJStatus.keyLock`), and labels the rate change "tempo ±x%" — key-lock keeps the
 pitch, not the tempo, so the percentage still moves while beat-matching.
 
@@ -291,11 +306,84 @@ Play reuses that buffer. During a set the cued deck's own buffer is used (silent
 copy in memory), so a scratch plays over the music on the same speakers. A playing cue (headphones) pauses
 while scratching and resumes from the new start on release; the scratch ends if the deck's mix starts mid-drag.
 
-Master volume (booth, under the level meter; `settings.volume`, 0..1, saved): `engine.volume` is the last gain
-before the speakers, a squared taper (`volumeGain`: 50% ≈ −12 dB, never a boost), gliding 30 ms so the slider
-never clicks. It sits **after** the meter and the watchdog's analyser, so turning it down (even to 0) never
-reads as silence and never triggers a recovery; the booth warns "Volume is at 0" while a set plays. It doesn't
-affect previews (headphones). Set before Play, it applies when the engine is created.
+Volumes (owner decision: one for each output): two sliders on the booth (under the level meter) and the same two
+under each output in Library → Audio outputs (`VolumeSlider`), both saved and both a squared taper (`volumeGain`:
+50% ≈ −12 dB, never a boost) gliding 30 ms so a slider never clicks.
+- **Club speakers** (`settings.volume`, `useSession.setVolume`): `engine.volume` is the last gain before the
+  speakers, **after** the meter and the watchdog's analyser, so turning it down (even to 0) never reads as silence
+  and never triggers a recovery; the booth warns "Volume is at 0" while a set plays. Covers the mix and the jog
+  scratch. Set before Play, it applies when the engine is created.
+- **Headphones** (`settings.previewVolume`, `useLibrary.setPreviewVolume`): `GridPreview`'s own output gain, which
+  every preview sound goes through (Cue, picker ▶, the track editor and its grid clicks); applied on hydrate.
+- Each output's **Test sound** plays at that output's volume.
+
+Deck play / pause (`AutoDJ.pauseDeck(i)` / `playDeck(i)`, `useSession`, the booth's big ⏸ / ▶ under each
+on-air and cued deck's title; `TransportButton` in `DeckPanel`):
+- ⏸ on air with no mix sounding: the deck fades out in `PAUSE_FADE` (60 ms) and stops; `paused` keeps its position
+  (and a pending dialogue jump). The cued transition is **held** (`holdPlanned`: timer, automation and effects
+  cancelled, `plan = HELD_PLAN`, the song stays loaded); `planNext` while paused holds instead of scheduling
+  (`hold`). Watchdog and early-end recovery are off, Drop / Layer / effects refuse, the standby is dropped, and
+  `status.paused` drives the badge, the banner and "When you press ▶". Mood changes, requests and Start from
+  still work on the held song. Saved as not playing, so a reload stays silent.
+- ▶ on the paused deck: it restarts from its position at rate 1 with a `RESUME_FADE` fade-in, and the held song is
+  scheduled as usual. ▶ on the held cued deck: that song starts at once (`firstStart`, fade-in) and the paused one
+  is unloaded.
+- ⏸ during a mix on the outgoing deck (`takeOver`): it fades out, the incoming eases every control to neutral
+  (`Deck.easeToNeutral`; filters glide to an inaudible cut-off so `clearFilter` is silent), a layer glides back
+  to its own tempo, and `handover()` runs at once. On the incoming deck (`cancelMix`): it fades out, the outgoing
+  eases back to full, and the same song is re-planned `deferred` — over the current song's outro (`mixOutPoint`
+  without the mood rule). The plan keeps `deferred` through Start from re-plans.
+- ▶ on the cued deck while playing: `schedule(…, { soon: true })` — a blend from the next 4-bar boundary, or a
+  landing entry (drop / dialogue / Desi Night) timed like a staff Drop. Refused within `SCHEDULE_MARGIN` of the
+  planned start, during a layer, or while the live song is in its dialogue (the button is disabled then).
+
+Tempo sliders (`DeckPanel`, beside the jog wheel of the on-air and cued decks during a set; ±`MAX_TEMPO` = 8%,
+double-click or the % button resets; BPM and "tempo ±x%" now sit under the title, the jog centre shows cover art):
+`AutoDJ.setDeckTempo(i, rate)`.
+- On air: `Deck.changeRate(rate)` glides there over 0.15 s — it cancels any glide still scheduled
+  (`cancelAndHoldAtTime`) and rebases the timeline first (`rebaseTimeline`, PURE, tested: a timeline holds one
+  ramp). The cued mix is re-planned 300 ms after the slider rests (`replanSoon`) so it stays on the new grid.
+  Paused: `paused.rate`, used on ▶ (a pause also keeps the tempo it was at, or heading for mid-glide).
+- Cued: `Planned.tempo`, the rate it settles at after its mix — the hand-back glide aims there instead of 1, and
+  unsynced entries (cut, echo-out, rewind) start at it. Kept through every re-plan (`unplan` returns it).
+- Refused (slider disabled) within `SCHEDULE_MARGIN` + 1 s of the cued mix and while it sounds.
+The slider shows the live rate every frame (the auto-DJ's sync and glides move it), the cued song's target before
+its mix.
+
+Spinback: in `JogWheel`, letting go of the on-air wheel while it turns backwards faster than 1080°/s (measured
+over the last 120 ms) calls `live.onFling` instead of `onCommit`. `AutoDJ.spinBack()` plays `Deck.rewind` from the
+held position (`from` param, the deck is already stopped) and starts the cued song `REWIND_LEAD` later on its
+landing entry (`resolveEntry`: its drop, through its dialogue if marked; its staff tempo). The old deck is freed and
+the next song planned once the spinback has played out. Without a cued song it just plays on (`releaseDeck`).
+Tests must flick in small steps: Chrome merges pointer moves sent back to back, and a merged jump of over half a
+turn reads as the other direction.
+
+Cover art (`lib/library/artwork.ts`, `components/booth/useArtwork.ts`): read lazily from the file the first time a
+deck shows the song (`music-metadata` pictures, front cover first), centre-cropped to a 320 px WebP and stored as
+`art:<id>` in IndexedDB (`false` when it has none, so tags are read once per song). It sits on the record's label
+and turns with the platter; without art the label shows the title's initials in the mood colour.
+
+Jog wheel on air (`JogScrub.live`, the on-air deck playing or paused, never while its mix sounds): it turns like
+vinyl, 200° per second of audio (Shift a quarter of that), starting from where the song is. Touching it
+(`useSession.grabDeck`) is `AutoDJ.pauseDeck(i, hold)` with a 12 ms fade (`paused.hold`, `status.holding`: badge
+"Scratch", no Paused banner); turning plays the scratch (`engine.scratch` on the club speakers) and letting go
+(`releaseDeck`) calls `movePaused(position)` then `playDeck(i, 0.012)`, so the held mix is re-planned from the new
+spot. On a song staff paused, the wheel only moves the paused spot (`movePaused`) and ▶ plays from there. A
+dialogue's jump to the drop survives a move that stays before the dialogue's end; letting go within 2 s of the end
+hands over to `recover` like an ending song. Keys and scroll step a beat the same way (grab, blip, release after
+350 ms).
+
+Live settings: every setting applies as soon as it changes, with no reload and no Stop. `store/session.ts`
+subscribes to `useLibrary` and `applySettings` passes changes to the running AutoDJ: club volume and output at
+once; key-lock via `AutoDJ.setKeyLock` → `engine.setKeyLock(on, fade)`, where each deck crossfades from its old
+route to the new one over 40 ms (`Deck.setKeyLock(node, fade)`; the new node's pitch picks up the deck's rate and
+any glide under way; `outputDelay` changes at once, so effects already scheduled are off by the key-lock delay);
+deck count via `AutoDJ.setDeckCount` — `engine.addDecks` at once (a 3rd deck takes a standby), and extra decks are
+removed from the end as soon as nothing plays, waits or is paused on them (`trimDecks`, checked on every status
+change; `freeDeck(…, deckTarget)` never picks a deck that's going). Preview output and volume apply on the next
+sound; moods at the next decision; track edits from the next pick. Across tabs: `store/library.ts` posts
+"settings" / "tracks" on a `BroadcastChannel` after every save, and other tabs reload them from IndexedDB (keeping
+their own session-only files), so the booth follows a Library page open in another tab.
 
 Start from: `AutoDJ.setEntry(choice)` re-plans the cued transition (like Drop and requests: only before it is
 under way) and the cued deck's overview shows a ⚑ where it will start.
@@ -310,6 +398,7 @@ the music plays (seen with synthetic kick-only tracks).
   audio from `setTimeout`/`setInterval`; JS timers are only for planning and hand-over.
 - **Change playback rate only via `Deck.rampRate()`** so `PlaybackTimeline` stays in sync (it also drives the
   key-lock pitch). Beat alignment depends on it. Likewise, jump inside a song only via `Deck.start(…, jump)`.
+- Settings apply live (see "Live settings"): never make a setting wait for Play or a reload.
 - Anything timed against what the room hears (master effects, display) adds `engine.outputDelay`.
 - `BiquadFilterNode.type` can't be scheduled — switch it immediately at an inaudible cut-off, then schedule
   the frequency sweep (see `filterSweep`).
@@ -382,7 +471,22 @@ device, and starts `next start -p 3100` (build first). Audio runs for real; noth
 - The jog scratch is a simple varispeed: no vinyl noise, no key-lock, no volume matching, and the wheel's momentum
   stops when you let go (no spin-out). During a set it plays the cued song over the music (owner's choice);
   key / scroll steps blip there too. Only tested headless (the output is measured, not heard).
-- The level meter shows the mix before the master volume, so it still moves with the volume at 0.
+- The tempo slider isn't on decks loaded before Play (they start at their own tempo), and a cued song with a
+  dialogue plays its dialogue at its own tempo. Moving the on-air tempo far from the cued song's can turn a planned
+  blend into an echo-out or cut (beyond ±8% sync).
+- Spinback is a fixed recipe (0.9 s, reversed audio speeding up), not a physical spin-down; it needs a cued song.
+- Cover art is read from tags only (no online lookup); WAVs rarely carry it.
+- Scratching the song on air uses the scratch worklet (no key-lock, no volume matching), so it can sound a little
+  louder or quieter than the song; the song restarts at its own tempo when let go, so the next mix is re-planned.
+- Switching key-lock mid-set smears for ~40 ms (the key-locked route is ~45 ms later). Track edits in another
+  tab reach the booth, but a song already on a deck keeps the analysis it was loaded with until it plays again.
+- Deck pause/resume is a fade-out / fade-in, not a vinyl-style stop; a resumed song restarts at its own tempo
+  (rate 1), so a tempo glide that was under way is skipped. A song paused during its mix doesn't keep its position:
+  it comes in again from its usual start. There's no "pause both decks" during a mix (owner's choice: ⏸ stops one
+  side), and ▶ on the cued deck isn't available during a layer.
+- The level meter shows the mix before the club speakers' volume, so it still moves with the volume at 0.
+- With no separate preview output, previews and the mix share one device, so the two volumes set two sounds on the
+  same speakers (the headphones slider then only changes previews).
 - The editor preview doesn't apply key-lock or volume matching, so it can sound slightly different from the booth.
 - Layer uses two decks (the playing and the cued). Layering a third song, or an a-cappella crate over the running
   mix on decks C/D, isn't built; nor is vocal separation (needs an ML model).

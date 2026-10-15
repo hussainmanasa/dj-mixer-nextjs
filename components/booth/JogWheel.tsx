@@ -24,8 +24,15 @@ const BEATS_PER_TURN = 16;
 const FINE_BEATS_PER_TURN = 4;
 /** Scroll / keys save the start point once they pause for this long (ms). */
 const COMMIT_AFTER = 350;
+/** Let go while spinning the song on air backwards faster than this (°/s, ~3 turns a second): a spinback. */
+const FLING_DEG_PER_SECOND = -1080;
+/** The spin speed at release is measured over the last this many ms of the drag. */
+const FLING_WINDOW_MS = 120;
 
-/** Makes the wheel set a deck's start point (loaded or cued decks only — never the one on air). */
+/**
+ * Makes the wheel turnable: on a loaded or cued deck it sets the start point;
+ * with `live` (the song on air, playing or paused) it moves the song itself.
+ */
 export interface JogScrub {
   /** The start point it shows (track seconds). */
   position: number;
@@ -38,29 +45,43 @@ export interface JogScrub {
   valueText: (position: number) => string;
   /** While turning: move the flag and the shown start; `step` for a key / scroll step (else a drag). */
   onMove: (position: number, step: boolean) => void;
-  /** Done turning: save it (snapped to the beat). */
+  /** Done turning: save it (snapped to the beat), or let the song play on from there. */
   onCommit: (position: number) => void;
+  /**
+   * The song on air: the wheel turns like a record (200° per second of audio)
+   * from wherever the song is; touching it stops the song (`onGrab`).
+   */
+  live?: {
+    position: () => number;
+    onGrab: () => void;
+    /** Let go while flicking it backwards fast: spin back (instead of `onCommit`). */
+    onFling?: (position: number) => void;
+  };
 }
 
 /**
- * The deck's jog wheel. On air it is display-only: the platter turns with the
- * track position, so it speeds up or slows down as the auto-DJ syncs tempo,
- * and the ring lights the beat in the bar (beat 1 brightest) so two
- * beat-matched decks flash together. With `scrub` (a loaded or cued deck) it
- * sets the start point: drag it round (Shift = fine), scroll over it, or use
- * the keys — ←/→ one beat, Shift+←/→ one bar, PageUp/PageDown 8 bars, Home the beginning.
+ * The deck's jog wheel. The platter turns with the track position, so it
+ * speeds up or slows down as the auto-DJ syncs tempo, and the ring lights the
+ * beat in the bar (beat 1 brightest) so two beat-matched decks flash together.
+ * With `scrub` it can be turned: drag it round (Shift = fine), scroll over it,
+ * or use the keys — ←/→ one beat, Shift+←/→ one bar, PageUp/PageDown 8 bars,
+ * Home the beginning. On a loaded or cued deck that sets the start point; on
+ * the song on air (`scrub.live`) it holds and moves the song like a record.
  */
 export function JogWheel({
   deck,
   track,
   color,
   scrub,
+  art,
   children,
 }: {
   deck: number;
   track: Track | null;
   color: string;
   scrub?: JogScrub;
+  /** Cover art for the record's label (it turns with the platter); without it the label shows initials. */
+  art?: string | null;
   children?: ReactNode;
 }) {
   const root = useRef<HTMLDivElement>(null);
@@ -69,7 +90,7 @@ export function JogWheel({
   const beats = useRef<(SVGPathElement | null)[]>([]);
   // The start point while turning (null when idle), and a pending save for scroll / keys.
   const turning = useRef<number | null>(null);
-  const drag = useRef<{ angle: number } | null>(null);
+  const drag = useRef<{ angle: number; recent: { t: number; deg: number }[] } | null>(null);
   const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latest = useRef(scrub);
   useEffect(() => {
@@ -95,10 +116,13 @@ export function JogWheel({
     if (commitTimer.current) clearTimeout(commitTimer.current);
     commitTimer.current = setTimeout(commit, COMMIT_AFTER);
   };
+  /** Where a turn starts: the start point, or where the song on air is now. */
+  const from = (s: JogScrub) => turning.current ?? (s.live ? s.live.position() : s.position);
   const stepBeats = (n: number) => {
     const s = latest.current;
     if (!s) return;
-    move((turning.current ?? s.position) + n * s.beat, true);
+    if (turning.current === null) s.live?.onGrab();
+    move(from(s) + n * s.beat, true);
     commitSoon();
   };
 
@@ -124,8 +148,10 @@ export function JogWheel({
     if (!scrub) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     e.currentTarget.focus();
-    drag.current = { angle: angleOf(e) };
-    turning.current = scrub.position;
+    drag.current = { angle: angleOf(e), recent: [] };
+    // A hand on the song on air stops it where it is.
+    if (turning.current === null) scrub.live?.onGrab();
+    turning.current = from(scrub);
   };
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
     const s = latest.current;
@@ -134,12 +160,30 @@ export function JogWheel({
     let delta = angle - drag.current.angle;
     delta -= 360 * Math.round(delta / 360);
     drag.current.angle = angle;
-    const perTurn = e.shiftKey ? FINE_BEATS_PER_TURN : BEATS_PER_TURN;
-    move((turning.current ?? s.position) + (delta / 360) * perTurn * s.beat);
+    const t = performance.now();
+    drag.current.recent = [...drag.current.recent.filter((r) => t - r.t < FLING_WINDOW_MS), { t, deg: delta }];
+    // On air: like vinyl (Shift: a quarter as far). Start point: beats per turn.
+    const seconds = s.live
+      ? (delta / DEG_PER_SECOND) * (e.shiftKey ? 0.25 : 1)
+      : (delta / 360) * (e.shiftKey ? FINE_BEATS_PER_TURN : BEATS_PER_TURN) * s.beat;
+    move(from(s) + seconds);
   };
   const onPointerUp = () => {
-    if (!drag.current) return;
+    const d = drag.current;
+    if (!d) return;
     drag.current = null;
+    // Flicked backwards fast on the song on air: spin it back.
+    const s = latest.current;
+    const now = performance.now();
+    const recent = d.recent.filter((r) => now - r.t < FLING_WINDOW_MS);
+    const span = recent.length > 1 ? (now - recent[0].t) / 1000 : 0;
+    const speed = span > 0 ? recent.reduce((sum, r) => sum + r.deg, 0) / span : 0;
+    if (s?.live?.onFling && turning.current !== null && speed < FLING_DEG_PER_SECOND) {
+      const p = turning.current;
+      turning.current = null;
+      s.live.onFling(p);
+      return;
+    }
     commit();
   };
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -147,6 +191,7 @@ export function JogWheel({
     const keys: Record<string, number> = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1, PageUp: 32, PageDown: -32 };
     if (e.key === "Home") {
       e.preventDefault();
+      if (turning.current === null) scrub.live?.onGrab();
       move(0, true);
       commitSoon();
     } else if (e.key in keys) {
@@ -160,12 +205,16 @@ export function JogWheel({
     const a = track?.analysis;
     if (platter.current) {
       const s = latest.current;
-      // A wheel that sets a start point shows it (turning with it); on air it shows the playing position.
-      const angle = s
-        ? (((turning.current ?? s.position) / s.beat) * (360 / BEATS_PER_TURN)) % 360
-        : view
-          ? (view.position * DEG_PER_SECOND) % 360
-          : 0;
+      // A wheel that sets a start point shows it (turning with it); on air it shows the song's position,
+      // or where the hand has it.
+      const angle =
+        s && !s.live
+          ? (((turning.current ?? s.position) / s.beat) * (360 / BEATS_PER_TURN)) % 360
+          : turning.current !== null
+            ? (turning.current * DEG_PER_SECOND) % 360
+            : view
+              ? (view.position * DEG_PER_SECOND) % 360
+              : 0;
       platter.current.style.transform = `rotate(${angle}deg)`;
     }
     if (glow.current) glow.current.style.opacity = String(view ? 0.15 + view.fader * 0.55 : 0);
@@ -226,10 +275,38 @@ export function JogWheel({
           ))}
           <line x1="100" y1="5" x2="100" y2="38" stroke={color} strokeWidth="7" strokeLinecap="round" />
           <circle cx="100" cy="172" r="3" fill="rgba(255,255,255,0.25)" />
-          <circle cx="100" cy="100" r="40" fill="#1b1b26" stroke="#2a2a38" />
+          <circle cx="100" cy="100" r="47" fill="#1b1b26" stroke="#2a2a38" />
         </svg>
+        {/* The record's label: the song's cover art (or its initials), turning with the platter. */}
+        {track && (
+          <div className="absolute inset-[26%] overflow-hidden rounded-full border-2 border-black/60 shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
+            {art ? (
+              <>
+                {/* eslint-disable-next-line @next/next/no-img-element -- a local object URL, not an optimisable asset */}
+                <img src={art} alt="" className="h-full w-full object-cover" draggable={false} />
+                <span className="absolute left-1/2 top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#07070b] ring-1 ring-white/30" />
+              </>
+            ) : (
+              <div
+                className="grid h-full w-full place-items-center text-2xl font-bold text-black/70"
+                style={{ background: `linear-gradient(135deg, ${color}, color-mix(in srgb, ${color} 45%, #07070b))` }}
+              >
+                {initials(track.title)}
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div className="absolute inset-0 grid place-items-center text-center">{children}</div>
     </div>
   );
+}
+
+/** Up to two initials of a title, for a label without cover art. */
+function initials(title: string): string {
+  const words = title.replace(/[^\p{L}\p{N} ]/gu, " ").split(/\s+/).filter(Boolean);
+  return words
+    .slice(0, 2)
+    .map((w) => w[0]!.toUpperCase())
+    .join("");
 }

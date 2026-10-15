@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { EQ_KILL_DB } from "@/lib/audio/deck";
-import { SCHEDULE_MARGIN } from "@/lib/dj/autodj";
+import { MAX_TEMPO, SCHEDULE_MARGIN } from "@/lib/dj/autodj";
 import { barAt, barLabel, beatBar, entryOptions, type CuePlan } from "@/lib/dj/cues";
 import { barSeconds } from "@/lib/dj/mixpoints";
 import { useLibrary } from "@/store/library";
@@ -13,6 +13,7 @@ import { formatTime, setText, useBoothFrame } from "./frame";
 import { JogWheel, type JogScrub } from "./JogWheel";
 import { DECK_LETTERS } from "./theme";
 import { TrackOverview } from "./TrackOverview";
+import { useArtwork } from "./useArtwork";
 
 /** `loaded`: staff loaded a song before Play. */
 export type DeckRole = "live" | "incoming" | "standby" | "idle" | "loaded";
@@ -36,8 +37,10 @@ const ROLE_LABEL: Record<DeckRole, string> = {
 
 /**
  * One deck as the auto-DJ is running it: jog wheel, tempo, fader and bass
- * meters, and the track overview. The only control is choosing the track for
- * a deck that isn't on air (`onChoose`); the auto-DJ mixes it in.
+ * meters, and the track overview. Staff can choose the track for a deck that
+ * isn't on air (`onChoose`; the auto-DJ mixes it in) and, during a set,
+ * pause / play the on-air and cued decks (`transport`) — every press goes
+ * through the auto-DJ, which keeps the mix in time.
  */
 export function DeckPanel({
   deck,
@@ -49,6 +52,7 @@ export function DeckPanel({
   keyLock = false,
   entry,
   cue,
+  transport,
 }: {
   deck: number;
   role: DeckRole;
@@ -63,6 +67,11 @@ export function DeckPanel({
   entry?: { choice: EntryChoice; startAt: number; set: (choice: EntryChoice) => void };
   /** Cue on the preview output (headphones): what to play, and whether it would be heard by the club. */
   cue?: { plan: CuePlan; blocked: boolean };
+  /**
+   * During a set, on the on-air and cued decks: ⏸ / ▶ and the tempo slider. `setPaused`: the song on air is
+   * paused. `tempo`: the cued song's tempo after its mix (null = its own).
+   */
+  transport?: { setPaused: boolean; thisPaused: boolean; tempo?: number | null };
 }) {
   const badge = useRef<HTMLSpanElement>(null);
   const bpm = useRef<HTMLSpanElement>(null);
@@ -82,6 +91,21 @@ export function DeckPanel({
   const cueHead = useRef<HTMLSpanElement>(null);
   const cueTag = `cue:${deck}`;
   const lockedRef = useRef(false);
+  // This deck's mix is sounding (⏸ then stops one side of it), and the live song is in its dialogue.
+  const [mixing, setMixing] = useState(false);
+  const mixingRef = useRef(false);
+  const [inDialogue, setInDialogue] = useState(false);
+  const inDialogueRef = useRef(false);
+  const pauseDeck = useSession((s) => s.pauseDeck);
+  const playDeck = useSession((s) => s.playDeck);
+  const grabDeck = useSession((s) => s.grabDeck);
+  const releaseDeck = useSession((s) => s.releaseDeck);
+  const holding = useSession((s) => s.status.holding);
+  const spinBack = useSession((s) => s.spinBack);
+  const setDeckTempo = useSession((s) => s.setDeckTempo);
+  const tempoInput = useRef<HTMLInputElement>(null);
+  const tempoValue = useRef<HTMLSpanElement>(null);
+  const art = useArtwork(track);
   const cueing = usePreview((s) => s.playing === cueTag);
   const cueLoading = usePreview((s) => s.loading);
   const playPreview = usePreview((s) => s.play);
@@ -102,7 +126,18 @@ export function DeckPanel({
       if (role === "incoming") label = snap.layering ? "Layered" : "Mixing in";
       if (role === "live" && !snap.layering) label = "Mixing out";
     }
+    if (transport?.thisPaused) label = holding ? "Scratch" : "Paused";
     setText(badge.current, label);
+    const nowMixing = (role === "incoming" || role === "live") && !!snap?.mix && snap.now >= snap.mix.start;
+    if (nowMixing !== mixingRef.current) {
+      mixingRef.current = nowMixing;
+      setMixing(nowMixing);
+    }
+    const dialogue = !!snap?.dropLocked;
+    if (dialogue !== inDialogueRef.current) {
+      inDialogueRef.current = dialogue;
+      setInDialogue(dialogue);
+    }
     // Once this deck's mix is (about to be) under way, its track and start can't change.
     const locked = role === "incoming" && !!snap?.mix && snap.now >= snap.mix.start - SCHEDULE_MARGIN;
     if (locked !== lockedRef.current) {
@@ -127,6 +162,13 @@ export function DeckPanel({
     const pct = (rate - 1) * 100;
     // Tempo change from the track's own BPM (beat-matching). With key-lock on, pitch stays put.
     setText(tempo.current, view && Math.abs(pct) >= 0.05 ? `tempo ${pct > 0 ? "+" : ""}${pct.toFixed(1)}%` : "BPM");
+    // The tempo slider shows the deck's tempo (the cued song before its mix: the tempo it will settle at),
+    // except while staff are moving it.
+    const shown = role === "incoming" && !nowMixing ? (transport?.tempo ?? 1) : rate;
+    const shownPct = (shown - 1) * 100;
+    const input = tempoInput.current;
+    if (input && document.activeElement !== input) input.value = shownPct.toFixed(1);
+    setText(tempoValue.current, `${shownPct > 0 ? "+" : ""}${shownPct.toFixed(1)}%`);
     setText(time.current, a ? `${formatTime(view?.position ?? 0)} / −${formatTime(a.duration - (view?.position ?? 0))}` : "");
     if (fader.current) fader.current.style.transform = `scaleY(${view ? view.fader : 0})`;
     if (bass.current) {
@@ -138,8 +180,33 @@ export function DeckPanel({
   // On a loaded or cued deck (never on air, nor once its mix has begun) the jog wheel sets the start point.
   const chosenStart =
     entry && a ? (entry.choice.kind === "bar" ? a.firstBeat + entry.choice.bar * barSeconds(a) : entry.startAt) : 0;
+  // On air (playing or paused, not during a mix): the wheel holds and moves the song like a record.
+  const liveJog: JogScrub | undefined =
+    role === "live" && transport && track && a && !mixing
+      ? {
+          position: 0,
+          duration: a.duration,
+          beat: barSeconds(a) / 4,
+          label: `Song position, Deck ${DECK_LETTERS[deck]}`,
+          valueText: (pos) => `${barLabel(beatBar(a, pos))} · ${formatTime(pos)}`,
+          live: {
+            position: () => useSession.getState().snapshot()?.decks[deck]?.position ?? 0,
+            onGrab: () => grabDeck(deck),
+            onFling: (pos) => {
+              scratchEnd();
+              spinBack(deck, pos);
+            },
+          },
+          onMove: (pos, step) => scratchAt(track, pos, step),
+          onCommit: (pos) => {
+            scratchEnd();
+            releaseDeck(deck, pos);
+          },
+        }
+      : undefined;
   const jog: JogScrub | undefined =
-    entry && track && a && !locked
+    liveJog ??
+    (entry && track && a && !locked
       ? {
           position: chosenStart,
           duration: a.duration,
@@ -171,7 +238,7 @@ export function DeckPanel({
             }
           },
         }
-      : undefined;
+      : undefined);
 
   const active = role === "live" || role === "incoming" || role === "loaded";
   return (
@@ -206,17 +273,48 @@ export function DeckPanel({
 
       <div className="flex items-stretch gap-4">
         <div className="mx-auto w-full max-w-[15rem] flex-1">
-          <JogWheel deck={deck} track={track} color={color} scrub={jog}>
-            <div>
-              <span ref={bpm} className="block font-mono text-2xl font-bold tabular-nums">
-                —
-              </span>
-              <span ref={tempo} className="block font-mono text-xs text-muted">
-                BPM
-              </span>
-            </div>
-          </JogWheel>
+          <JogWheel deck={deck} track={track} color={color} scrub={jog} art={art} />
         </div>
+        {transport && track && a && (role === "live" || role === "incoming") && (
+          <div className="flex w-12 flex-col items-center gap-1">
+            <span className="text-[10px] font-bold text-muted" aria-hidden>
+              +{MAX_TEMPO * 100}
+            </span>
+            <input
+              ref={tempoInput}
+              type="range"
+              min={-MAX_TEMPO * 100}
+              max={MAX_TEMPO * 100}
+              step={0.1}
+              defaultValue={0}
+              aria-label={`Tempo, Deck ${DECK_LETTERS[deck]}`}
+              title={
+                role === "incoming"
+                  ? "Tempo this song settles at after its mix (it's beat-matched during the mix)"
+                  : "Tempo of the song on air; the auto-DJ re-times the next mix"
+              }
+              // The cued song is coming in, or this one is mixing: the auto-DJ has the tempo then.
+              disabled={mixing || (role === "incoming" && locked)}
+              onChange={(e) => setDeckTempo(deck, 1 + Number(e.target.value) / 100)}
+              onDoubleClick={() => setDeckTempo(deck, 1)}
+              className="w-full flex-1 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+              style={{ writingMode: "vertical-lr", direction: "rtl", accentColor: color }}
+            />
+            <span className="text-[10px] font-bold text-muted" aria-hidden>
+              −{MAX_TEMPO * 100}
+            </span>
+            <button
+              type="button"
+              className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-muted hover:text-foreground disabled:opacity-40"
+              disabled={mixing || (role === "incoming" && locked)}
+              onClick={() => setDeckTempo(deck, 1)}
+              aria-label={`Reset tempo, Deck ${DECK_LETTERS[deck]}`}
+              title="Back to the song's own tempo"
+            >
+              <span ref={tempoValue}>0.0%</span>
+            </button>
+          </div>
+        )}
         <div className="flex w-10 flex-col items-center gap-2" aria-hidden>
           <div className="relative w-3 flex-1 overflow-hidden rounded-full bg-surface-2">
             <div ref={fader} className="absolute inset-0 origin-bottom rounded-full" style={{ background: color, transform: "scaleY(0)" }} />
@@ -247,8 +345,30 @@ export function DeckPanel({
             )}
           </div>
         </div>
-        <p className="mt-1 flex justify-between font-mono text-sm text-muted">
+        {transport && track && (role === "live" || role === "incoming") && (
+          <TransportButton
+            deck={deck}
+            role={role}
+            color={color}
+            paused={transport.thisPaused}
+            setPaused={transport.setPaused}
+            mixing={mixing}
+            // The cued song is about to come in anyway, or the live song is still in its dialogue.
+            busy={role === "incoming" && !mixing && !transport.setPaused && (locked || inDialogue)}
+            onPause={() => pauseDeck(deck)}
+            onPlay={() => playDeck(deck)}
+          />
+        )}
+        <p className="mt-1 flex items-baseline justify-between gap-3 font-mono text-sm text-muted">
           <span>{track?.camelot ?? "key —"}</span>
+          <span className="flex items-baseline gap-1.5">
+            <span ref={bpm} className="text-lg font-bold text-foreground tabular-nums">
+              —
+            </span>
+            <span ref={tempo} className="text-xs">
+              BPM
+            </span>
+          </span>
           <span ref={time} className="tabular-nums" />
         </p>
         {entry && track && (
@@ -323,5 +443,60 @@ export function DeckPanel({
         onPickBar={entry ? (bar) => entry.set({ kind: "bar", bar }) : undefined}
       />
     </section>
+  );
+}
+
+/**
+ * ⏸ / ▶ for a deck during a set. On air: pause (the club hears nothing until
+ * ▶) and resume where it stopped. During a mix: ⏸ stops that side and the other
+ * song carries on. On the cued deck: ▶ brings it in on the next phrase (or, while
+ * the set is paused, starts it at once).
+ */
+function TransportButton({
+  deck,
+  role,
+  color,
+  paused,
+  setPaused,
+  mixing,
+  busy,
+  onPause,
+  onPlay,
+}: {
+  deck: number;
+  role: "live" | "incoming";
+  color: string;
+  paused: boolean;
+  setPaused: boolean;
+  mixing: boolean;
+  busy: boolean;
+  onPause: () => void;
+  onPlay: () => void;
+}) {
+  const letter = DECK_LETTERS[deck];
+  const pause = role === "live" ? !paused : mixing;
+  const label = pause ? "⏸ Pause" : role === "live" ? "▶ Resume" : "▶ Play now";
+  const name = pause ? `Pause Deck ${letter}` : role === "live" ? `Resume Deck ${letter}` : `Play Deck ${letter} now`;
+  const title = pause
+    ? mixing
+      ? "Stop this side of the mix; the other song carries on"
+      : "Pause: the club hears nothing until you press ▶"
+    : role === "live"
+      ? "Carry on from where it stopped"
+      : setPaused
+        ? "Start this song now"
+        : "Mix it in on the next phrase, beat-matched";
+  return (
+    <button
+      type="button"
+      className="btn mt-3 h-14 w-full text-lg font-bold"
+      disabled={busy}
+      aria-label={name}
+      title={title}
+      onClick={pause ? onPause : onPlay}
+      style={!pause && !busy ? { borderColor: color, color } : undefined}
+    >
+      {label}
+    </button>
   );
 }

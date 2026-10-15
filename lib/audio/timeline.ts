@@ -87,3 +87,14 @@ export class PlaybackTimeline {
     return r.t1 + (pos - p1) / r.r1;
   }
 }
+
+/**
+ * The same playback from context time `t` on, as a fresh timeline with no ramp:
+ * starts at the position and rate it has at `t` and keeps a jump still to come.
+ * A tempo change mid-song (staff's tempo slider) rebases before ramping, since a
+ * timeline holds only one ramp.
+ */
+export function rebaseTimeline(tl: PlaybackTimeline, t: number): PlaybackTimeline {
+  const jump = tl.jump && tl.jump.at > t ? tl.jump : null;
+  return new PlaybackTimeline(t, tl.positionAt(t), tl.rateAt(t), null, jump);
+}

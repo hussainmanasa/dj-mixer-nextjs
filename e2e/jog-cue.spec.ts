@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { deckStates, dropButton, loadLibrary } from "./helpers";
+import { deckStates, dropButton, loadLibrary, tapAudio } from "./helpers";
 
 const deck = (page: Page, letter: string) => page.getByRole("region", { name: `Deck ${letter}` });
 
@@ -84,72 +84,6 @@ test("the jog wheel sets a loaded deck's start: keys, drag and scroll", async ({
   await expect(page.getByRole("slider", { name: "Start point, Deck A" })).toHaveCount(0);
 });
 
-/**
- * Measure the audio: which AudioContext the scratch worklet runs on (the engine's is created with
- * latencyHint "playback", the preview player's with "interactive"), how loud the scratch is, and
- * the engine's level before the master volume (the watchdog's analyser) and at the speakers.
- */
-async function tapAudio(page: Page) {
-  await page.addInitScript(() => {
-    type Taps = { scrubPeak: number; scrubHint: string; scrubMessages: string[]; pre: number; post: number };
-    const w = window as unknown as { taps: Taps };
-    w.taps = { scrubPeak: 0, scrubHint: "", scrubMessages: [], pre: 0, post: 0 };
-    const hints = new WeakMap<BaseAudioContext, string>();
-    const NativeCtx = AudioContext;
-    window.AudioContext = class extends NativeCtx {
-      constructor(opts?: AudioContextOptions) {
-        super(opts);
-        hints.set(this, String(opts?.latencyHint ?? ""));
-      }
-    } as typeof AudioContext;
-    const connect = AudioNode.prototype.connect as (this: AudioNode, ...args: unknown[]) => unknown;
-    // Taps are connected with the unpatched connect, once per node (an analyser tapping an analyser would recurse).
-    const tapped = new WeakSet<AudioNode>();
-    const watch = (ctx: BaseAudioContext, node: AudioNode, key: "scrubPeak" | "pre" | "post") => {
-      if (tapped.has(node)) return;
-      tapped.add(node);
-      const an = new AnalyserNode(ctx, { fftSize: 2048 });
-      connect.call(node, an);
-      const buf = new Float32Array(an.fftSize);
-      setInterval(() => {
-        an.getFloatTimeDomainData(buf);
-        for (const x of buf) w.taps[key] = Math.max(w.taps[key], Math.abs(x));
-      }, 20);
-    };
-    AudioNode.prototype.connect = function (this: AudioNode, ...args: unknown[]) {
-      const dest = args[0];
-      if (hints.get(this.context) === "playback") {
-        // The watchdog's analyser feeds the master volume; the volume feeds the speakers.
-        if (this instanceof AnalyserNode && this.fftSize === 32768) watch(this.context, this, "pre");
-        if (dest === this.context.destination) watch(this.context, this, "post");
-      }
-      return connect.apply(this, args);
-    } as typeof AudioNode.prototype.connect;
-    const NativeWorklet = AudioWorkletNode;
-    window.AudioWorkletNode = class extends NativeWorklet {
-      constructor(ctx: BaseAudioContext, name: string, opts?: AudioWorkletNodeOptions) {
-        super(ctx, name, opts);
-        if (name !== "scrub") return;
-        w.taps.scrubHint = hints.get(ctx) ?? "";
-        const post = this.port.postMessage.bind(this.port) as (m: unknown, t?: Transferable[]) => void;
-        this.port.postMessage = ((m: { type: string }, t?: Transferable[]) => {
-          w.taps.scrubMessages.push(m.type);
-          post(m, t);
-        }) as typeof this.port.postMessage;
-        watch(ctx, this, "scrubPeak");
-      }
-    } as typeof AudioWorkletNode;
-  });
-  return {
-    get: () => page.evaluate(() => (window as unknown as { taps: { scrubPeak: number; scrubHint: string; scrubMessages: string[]; pre: number; post: number } }).taps),
-    reset: () =>
-      page.evaluate(() => {
-        const t = (window as unknown as { taps: { scrubPeak: number; pre: number; post: number } }).taps;
-        t.scrubPeak = t.pre = t.post = 0;
-      }),
-  };
-}
-
 /** Drag the jog wheel a quarter turn clockwise, slowly enough to be heard. */
 async function dragQuarterTurn(page: Page, jog: ReturnType<Page["getByRole"]>, release = true) {
   const box = (await jog.boundingBox())!;
@@ -210,17 +144,49 @@ test("the jog wheel scratches on the club speakers; a playing cue resumes from t
   expect(errors).toEqual([]);
 });
 
-test("master volume turns the club speakers down without tripping the silence watchdog", async ({ page }) => {
+test("separate volumes for the club speakers and the headphones; the club one never trips the silence watchdog", async ({ page }) => {
   const taps = await tapAudio(page);
   await loadLibrary(page);
   await page.click("nav >> text=Booth");
-  const volume = page.getByRole("slider", { name: "Volume" });
-  await expect(volume).toHaveValue("100");
+  const club = page.getByRole("slider", { name: "Club speakers volume" });
+  const phones = page.getByRole("slider", { name: "Headphones volume" });
+  await expect(club).toHaveValue("100");
+  await expect(phones).toHaveValue("100");
+
+  // Headphones: a cue at 50% ≈ −12 dB, at 0 silent.
+  await deck(page, "A").getByRole("button", { name: "Load track" }).click();
+  await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove C" }).getByRole("button").last().click();
+  await phones.fill("50");
+  await deck(page, "A").getByRole("button", { name: "🎧 Cue" }).click();
+  await expect(deck(page, "A").getByRole("button", { name: "■ Stop cue" })).toBeVisible();
+  await page.waitForTimeout(300);
+  await taps.reset();
+  await page.waitForTimeout(1500);
+  const phonesHalf = await taps.get();
+  expect(phonesHalf.previewPre).toBeGreaterThan(0.05);
+  expect(phonesHalf.previewPost / phonesHalf.previewPre).toBeGreaterThan(0.2);
+  expect(phonesHalf.previewPost / phonesHalf.previewPre).toBeLessThan(0.3);
+  await phones.fill("0");
+  await page.waitForTimeout(300);
+  await taps.reset();
+  await page.waitForTimeout(1000);
+  const phonesMuted = await taps.get();
+  expect(phonesMuted.previewPre).toBeGreaterThan(0.05);
+  expect(phonesMuted.previewPost).toBeLessThan(0.001);
+  await deck(page, "A").getByRole("button", { name: "■ Stop cue" }).click();
+
+  // Club speakers: the headphones' volume doesn't touch the mix.
   await page.locator("button[aria-busy]").click();
   await expect.poll(async () => (await deckStates(page)).join(" "), { timeout: 30_000 }).toMatch(/A:On air/);
+  await page.waitForTimeout(300);
+  await taps.reset();
+  await page.waitForTimeout(1500);
+  const full = await taps.get();
+  expect(full.pre).toBeGreaterThan(0.05);
+  expect(full.post / full.pre).toBeGreaterThan(0.9);
 
   // Half way ≈ −12 dB at the speakers; the level before the volume is unchanged.
-  await volume.fill("50");
+  await club.fill("50");
   await page.waitForTimeout(300);
   await taps.reset();
   await page.waitForTimeout(1500);
@@ -231,7 +197,7 @@ test("master volume turns the club speakers down without tripping the silence wa
 
   // At 0 the speakers are silent, the booth warns, and the music keeps playing (no "silence" recovery).
   const onAir = (await deckStates(page)).find((d) => d.startsWith("A:"))!;
-  await volume.fill("0");
+  await club.fill("0");
   await expect(page.getByText("Volume is at 0 — the club hears nothing")).toBeVisible();
   await page.waitForTimeout(300);
   await taps.reset();
@@ -241,9 +207,14 @@ test("master volume turns the club speakers down without tripping the silence wa
   expect(muted.post).toBeLessThan(0.001);
   expect((await deckStates(page)).find((d) => d.startsWith("A:"))!.split(" ").at(-1)).toBe(onAir.split(" ").at(-1));
 
-  // It is saved: after a reload the slider is where it was left.
-  await volume.fill("80");
+  // Both are saved, and the Library's Audio outputs shows the same two sliders.
+  await club.fill("80");
+  await phones.fill("30");
   await page.waitForTimeout(500);
   await page.reload();
-  await expect(page.getByRole("slider", { name: "Volume" })).toHaveValue("80");
+  await expect(page.getByRole("slider", { name: "Club speakers volume" })).toHaveValue("80");
+  await expect(page.getByRole("slider", { name: "Headphones volume" })).toHaveValue("30");
+  await page.click("nav >> text=Library");
+  await expect(page.getByRole("slider", { name: "Club speakers volume" })).toHaveValue("80");
+  await expect(page.getByRole("slider", { name: "Headphones volume" })).toHaveValue("30");
 });
