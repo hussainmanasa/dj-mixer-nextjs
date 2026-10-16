@@ -152,6 +152,14 @@ export interface DeckView {
   fader: number;
   /** Current low-EQ gain in dB (0 = full bass, EQ_KILL_DB = killed). */
   bassDb: number;
+  /** Current mid and high EQ gains (dB) and the volume-matching trim (dB) — the mixer's knobs show them. */
+  midDb: number;
+  highDb: number;
+  trimDb: number;
+  /** Colour FX position, −1 (low-pass) … 0 (open) … +1 (high-pass). */
+  cfx: number;
+  /** Channel level after the fader (peak, 0..1+). */
+  level: number;
 }
 
 /** A deck loaded before Play: its song and how it should start / come in. */
@@ -2047,6 +2055,11 @@ export class AutoDJ {
                     : d.timeline.rateAt(now),
               fader: d.fader.gain.value,
               bassDb: d.low.gain.value,
+              midDb: d.mid.gain.value,
+              highDb: d.high.gain.value,
+              trimDb: 20 * Math.log10(Math.max(1e-4, d.trim.gain.value)),
+              cfx: d.filterPosition(),
+              level: d.level(),
             }
           : null,
       ),

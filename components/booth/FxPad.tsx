@@ -36,10 +36,10 @@ export function FxPad({ enabled, color }: { enabled: boolean; color: string }) {
 
   return (
     <div className="w-full">
-      <h3 className="mb-2 text-center text-xs font-medium uppercase tracking-wider text-muted">
-        Effects <span ref={auto} style={{ color }} />
+      <h3 className="mb-1.5 text-center text-[9px] font-semibold uppercase tracking-[0.18em] text-[#9a9aa6]">
+        Beat FX <span ref={auto} style={{ color }} />
       </h3>
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-2 gap-1.5">
         {FX_KINDS.map((kind) => (
           <button
             key={kind}
@@ -50,7 +50,7 @@ export function FxPad({ enabled, color }: { enabled: boolean; color: string }) {
             disabled={!enabled}
             title={FX_LABEL[kind].hint}
             onClick={() => fx(kind)}
-            className="relative h-14 overflow-hidden rounded-xl border border-border bg-surface-2 text-sm font-semibold transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-35"
+            className="relative h-10 overflow-hidden rounded-md border border-[#34343c] bg-[#202026] text-xs font-bold uppercase tracking-wider transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-35"
           >
             <span
               ref={(el) => {

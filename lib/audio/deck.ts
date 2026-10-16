@@ -29,6 +29,9 @@ export class Deck {
   readonly echoSend: GainNode;
   readonly echoDelay: DelayNode;
   readonly echoFeedback: GainNode;
+  /** Taps the fader's output for the booth's channel level meter (display only). */
+  private readonly meter: AnalyserNode;
+  private meterData: Float32Array<ArrayBuffer> | null = null;
   /** Everything the deck outputs passes through here. */
   readonly out: GainNode;
   private readonly destination: AudioNode;
@@ -74,6 +77,31 @@ export class Deck {
     // Echo taps pre-fader so the tail keeps ringing after the fader closes.
     this.filter.connect(this.echoSend).connect(this.echoDelay).connect(this.out);
     this.echoDelay.connect(this.echoFeedback).connect(this.echoDelay);
+    this.meter = new AnalyserNode(ctx, { fftSize: 1024 });
+    this.fader.connect(this.meter);
+  }
+
+  /** The loudest sample after the fader over the last ~20 ms (0..1+), for the channel meter. */
+  level(): number {
+    this.meterData ??= new Float32Array(this.meter.fftSize);
+    this.meter.getFloatTimeDomainData(this.meterData);
+    let peak = 0;
+    for (const v of this.meterData) peak = Math.max(peak, Math.abs(v));
+    return peak;
+  }
+
+  /**
+   * Colour FX position for the booth's CFX knob (display only): −1 = low-pass closed, 0 = open, +1 = high-pass
+   * fully up, from the filter's type and cut-off.
+   */
+  filterPosition(): number {
+    const f = this.filter;
+    if (f.type === "allpass") return 0;
+    const hz = Math.max(20, Math.min(20000, f.frequency.value));
+    const octaves = Math.log2(hz / 20) / Math.log2(1000);
+    if (f.type === "lowpass") return -Math.max(0, Math.min(1, 1 - octaves));
+    if (f.type === "highpass") return Math.max(0, Math.min(1, octaves));
+    return 0;
   }
 
   private connectRoute(node: AudioWorkletNode | null, gain: number): GainNode {
@@ -300,11 +328,13 @@ export class Deck {
    * under way stops at its current rate. A dialogue's jump still to come is called off.
    */
   setLoop(start: number, end: number): boolean {
-    if (this.pendingJump() !== null) this.cancelJump();
+    // A dialogue still playing: its jump is called off. A hot-cue jump still to come (`jumpAt` — e.g. to the
+    // start of a loop the song is past) stays: the loop is set on the source that plays from it.
+    if (this.pendingJump() !== null && this.preJump) this.cancelJump();
     const src = this.source;
     const tl = this.timeline;
     const now = this.ctx.currentTime;
-    if (!src || !tl || end <= start || (tl.jump && tl.jump.at > now)) return false;
+    if (!src || !tl || end <= start || (tl.jump && tl.jump.at > now && this.preJump)) return false;
     this.preJump = null;
     this.preGain = null;
     if (tl.ramp && tl.ramp.t1 > now) {

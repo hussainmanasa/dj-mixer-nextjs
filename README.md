@@ -28,10 +28,16 @@ Open http://localhost:3000, then:
    Riser) fire on the next beat; **Change track** / **Add track** request music. The auto-DJ still
    beat-matches and mixes every request for the mood, and in moods with *Add effects on transitions* it fires
    effects itself as the music changes (the FX pad lights up, marked "auto").
-   **🎧 Listen** on a loaded or cued deck plays it in your headphones (the preview output); **Set start here** makes
+   **🎧 CUE** in the mixer plays a loaded or cued deck in your headphones (the preview output); **Set start here** makes
    that its start. The picker's **▶** previews a song before you choose it. On a loaded or cued deck you can
    also turn the **jog wheel** (drag, scroll, or click it and use the arrow keys) to move its start point — it
    scratches on the club speakers as you turn it (during a set, over the music).
+   **Laid out like a Pioneer DDJ-FLX4**: Deck A · mixer · Deck B under the "screen" (moods, track view, Up next,
+   queue). Each deck has the loop section (IN, OUT, 4 BEAT / EXIT, ½, 2×) and BEAT SYNC on top, a display, the jog
+   wheel with its tempo slider, round CUE and ▶ / ⏸ buttons, and 8 pads with modes HOT CUE / BEAT LOOP (¼–32 beats) /
+   SAVED. The mixer has MASTER and PHONES volume knobs around the set's Play / Stop, LOAD per deck, AI DJ, Drop, Beat FX,
+   🎧 CUE per channel, and TRIM / HI / MID / LOW / CFX knobs, channel faders with level meters and a crossfader that
+   move by themselves to show what the auto-DJ is doing (staff don't mix by hand).
    **Every deck is a plain player** — CUE, ▶ / ⏸, loops, cue pads, tempo and the jog wheel work on any deck with a
    song, at any time, AI DJ on or off, also in the middle of the auto-DJ's own mix (it lets go and both songs play
    on). **▶ Play / ⏸ Pause** is one button: ⏸ stops just that deck and nothing changes by itself; with nothing else
@@ -60,8 +66,8 @@ Open http://localhost:3000, then:
    **Track view** above the decks shows the songs one below another: a scrolling waveform with the beat grid,
    bar numbers, phrases, drops, cue pads and the mix point, plus BPM, key, time, bar/beat and phrase — during a
    mix you can watch both songs' beats line up.
-   **Volume** under the level meter has two sliders: **Club speakers** (the mix) and **Headphones** (Cue and
-   previews). Both are saved and also sit under each output in Library → Audio outputs.
+   **Volume**: the mixer's **MASTER** knob (club speakers, the mix) and **PHONES** knob (headphones: 🎧 CUE and
+   previews) — drag, scroll or arrow keys. Both are saved and are also sliders under each output in Library → Audio outputs.
 
 The **Help** page in the app (`/help`) explains every control in plain words for booth staff and the venue admin.
 

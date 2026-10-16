@@ -88,6 +88,7 @@ test("while paused the jog wheel scratches on the club speakers and moves the sp
   const messages = (await taps.get()).scrubMessages.length;
 
   const jog = page.getByRole("slider", { name: "Song position, Deck A" });
+  await jog.scrollIntoViewIfNeeded();
   const box = (await jog.boundingBox())!;
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;

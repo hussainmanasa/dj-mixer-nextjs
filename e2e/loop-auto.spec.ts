@@ -19,6 +19,8 @@ test("loops: the song repeats a few beats until let go, the next mix waits; Drop
   await expect.poll(() => played(page, "A"), { timeout: 15_000 }).toBeGreaterThanOrEqual(3);
 
   // A 4-beat loop (about 1.9 s at 126 BPM): the time stays put while it repeats, the music plays on.
+  // The pads' BEAT LOOP mode.
+  await page.getByRole("button", { name: "Beat loop pads, Deck A" }).click();
   const loop4 = page.getByRole("button", { name: "Loop 4 beats, Deck A" });
   await loop4.click();
   await expect(loop4).toHaveAttribute("aria-pressed", "true");

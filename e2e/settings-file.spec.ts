@@ -115,7 +115,7 @@ test("settings travel with the music folder: imported on open, kept up to date, 
 
   // Cue out (from the file): the auto-DJ hands over there — about 0:32 — instead of after the song's drops.
   await page.click("nav >> text=Booth");
-  await page.getByRole("region", { name: "Deck A" }).getByRole("button", { name: "Load track" }).click();
+  await page.getByRole("button", { name: "Load track, Deck A" }).click();
   await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove A" }).getByRole("button").last().click();
   await page.getByRole("button", { name: /^Groove/ }).click();
   await page.locator("button[aria-busy]").click();

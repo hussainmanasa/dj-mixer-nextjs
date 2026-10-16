@@ -64,10 +64,11 @@ test("saved loops: made on the editor's waveform, dragged on the beat, then loop
 
   // On the booth: load it into Deck A, play, and press its saved loop: the song keeps coming back to it.
   await page.click("nav >> text=Booth");
-  await deck(page, "A").getByRole("button", { name: "Load track" }).click();
+  await page.getByRole("button", { name: "Load track, Deck A" }).click();
   await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove A" }).getByRole("button").last().click();
   await page.locator("button[aria-busy]").click();
   await expect.poll(() => states(page), { timeout: 30_000 }).toMatch(/A:On air/);
+  await page.getByRole("button", { name: "Saved loop pads, Deck A" }).click();
   const saved = deck(page, "A").getByRole("button", { name: /^Saved loop 1, Bar \d+\.\d, Deck A$/ });
   await saved.click();
   await expect(saved).toHaveAttribute("aria-pressed", "true");
@@ -88,6 +89,7 @@ test("a loop on the cued deck: armed before it plays, it loops while playing tog
   await expect.poll(() => states(page), { timeout: 30_000 }).toMatch(/A:On air.*B:Cued/);
 
   // Arm an 8-beat loop on the cued song, then ▶ Play: it comes in looping.
+  await page.getByRole("button", { name: "Beat loop pads, Deck B" }).click();
   const loopB = page.getByRole("button", { name: "Loop 8 beats, Deck B" });
   await loopB.click();
   await expect(loopB).toHaveAttribute("aria-pressed", "true");

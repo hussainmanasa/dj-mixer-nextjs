@@ -19,7 +19,7 @@ test("track view: the decks' songs one below another, with waveform, beats, bar 
   await loadLibrary(page);
   await page.click("nav >> text=Booth");
   // Before Play: a loaded deck gets its row.
-  await page.getByRole("region", { name: "Deck A" }).getByRole("button", { name: "Load track" }).click();
+  await page.getByRole("button", { name: "Load track, Deck A" }).click();
   await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove A" }).getByRole("button").last().click();
   await expect(row(page, "A")).toContainText("Loaded");
   await expect(row(page, "A")).toContainText("Test Groove A 126");

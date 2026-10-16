@@ -11,6 +11,7 @@ const playedA = async (page: Page) => {
 
 /** Turn the wheel `turns` times (negative = backwards), holding it until `release`. */
 async function spin(page: Page, jog: Locator, turns: number, release = true) {
+  await jog.scrollIntoViewIfNeeded();
   const box = (await jog.boundingBox())!;
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;

@@ -17,7 +17,7 @@ test("audio outputs, Cue on a loaded deck with Set start here, picker preview, a
 
   // Booth, before Play: load Deck A and cue it.
   await page.click("nav >> text=Booth");
-  await deck(page, "A").getByRole("button", { name: "Load track" }).click();
+  await page.getByRole("button", { name: "Load track, Deck A" }).click();
   // The picker previews a song before choosing it.
   const picker = page.getByRole("dialog");
   await picker.getByRole("button", { name: "Preview Test Groove C 127" }).click();
@@ -25,25 +25,25 @@ test("audio outputs, Cue on a loaded deck with Set start here, picker preview, a
   await picker.getByRole("listitem").filter({ hasText: "Test Groove C" }).getByRole("button").last().click();
   await expect(deck(page, "A")).toContainText("Test Groove C");
 
-  const cue = deck(page, "A").getByRole("button", { name: "🎧 Listen" });
+  const cue = page.getByRole("button", { name: "Listen, Deck A" });
   await cue.click();
-  await expect(deck(page, "A").getByRole("button", { name: "■ Stop listening" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop listening, Deck A" })).toBeVisible();
   // The cue playhead moves.
   const head = async () => {
-    const m = ((await deck(page, "A").textContent()) ?? "").match(/cue (\d+):(\d\d)\.(\d)/);
+    const m = ((await page.getByTestId("cue-head-A").textContent()) ?? "").match(/cue (\d+):(\d\d)\.(\d)/);
     return m ? Number(m[1]) * 60 + Number(m[2]) + Number(m[3]) / 10 : NaN;
   };
   const first = await expect.poll(head).toBeGreaterThan(0).then(() => head());
   await page.waitForTimeout(1500);
   expect(await head()).toBeGreaterThan(first);
-  await deck(page, "A").getByRole("button", { name: "Set start here" }).click();
+  await page.getByRole("button", { name: "Set start here, Deck A" }).click();
   await expect(deck(page, "A")).toContainText(/Bar \d+/);
   await page.screenshot({ path: "test-results/cue.png" });
-  await deck(page, "A").getByRole("button", { name: "■ Stop listening" }).click();
+  await page.getByRole("button", { name: "Stop listening, Deck A" }).click();
 
   // During a set, with the preview on the club speakers, Cue on the cued deck is blocked.
   await page.locator("button[aria-busy]").click();
   await expect.poll(async () => (await deckStates(page)).join(" "), { timeout: 30_000 }).toMatch(/B:Cued/);
-  await expect(deck(page, "B").getByRole("button", { name: "🎧 Listen" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Listen, Deck B" })).toBeDisabled();
   expect(errors).toEqual([]);
 });

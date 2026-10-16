@@ -20,19 +20,19 @@ test("decks loaded before Play: Deck A starts from its chosen point, Deck B come
   await page.getByRole("button", { name: /^Groove/ }).click();
 
   // Load Deck A with C (start from its drop) and Deck B with A.
-  await deck(page, "A").getByRole("button", { name: "Load track" }).click();
+  await page.getByRole("button", { name: "Load track, Deck A" }).click();
   await expect(page.getByRole("dialog")).toContainText("Load a track into Deck A");
   await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove C" }).getByRole("button").last().click();
   await expect(deck(page, "A")).toContainText("Loaded");
   await expect(deck(page, "A")).toContainText("Test Groove C");
   await deck(page, "A").getByRole("radio", { name: "Drop" }).click();
-  await deck(page, "B").getByRole("button", { name: "Load track" }).click();
+  await page.getByRole("button", { name: "Load track, Deck B" }).click();
   await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove A" }).getByRole("button").last().click();
   await expect(deck(page, "B")).toContainText("Test Groove A");
   // Eject and reload works.
   await deck(page, "B").getByRole("button", { name: "Eject Deck B" }).click();
   await expect(deck(page, "B")).toContainText("Empty");
-  await deck(page, "B").getByRole("button", { name: "Load track" }).click();
+  await page.getByRole("button", { name: "Load track, Deck B" }).click();
   await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove A" }).getByRole("button").last().click();
   await page.screenshot({ path: "test-results/preload.png" });
 
@@ -57,7 +57,7 @@ test("the auto-DJ adds effects as the music changes, and the FX pad shows them",
   // The staff riser lights first; in the last bar before the drop the auto-DJ closes the filter.
   const filter = page.getByRole("button", { name: "Filter", exact: true });
   await expect(filter).toHaveAttribute("data-active", "true", { timeout: 20_000 });
-  await expect(page.getByText("Effects")).toContainText("auto");
+  await expect(page.getByText("Beat FX")).toContainText("auto");
   await page.screenshot({ path: "test-results/auto-fx.png" });
   await expect.poll(async () => (await deckStates(page)).join(" "), { timeout: 30_000 }).not.toMatch(/Mixing/);
   await expect(filter).toHaveAttribute("data-active", "false");

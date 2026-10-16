@@ -98,4 +98,13 @@ describe("loops", () => {
     expect(tl.positionAt(0.5)).toBeCloseTo(30.9, 9);
     expect(tl.positionAt(0.7)).toBeCloseTo(30.1, 9);
   });
+
+  it("a jump back to a loop's start (the song was past it), then the loop: it loops from the jump on", () => {
+    // At 2 s (track 52) the deck jumps back to 40, then loops 40–42.
+    const tl = rebaseTimeline(new PlaybackTimeline(0, 50, 1, null, { at: 2, to: 40 }), 1);
+    tl.loop = { start: 40, end: 42 };
+    expect(tl.positionAt(2.5)).toBeCloseTo(40.5, 9);
+    expect(tl.positionAt(4.5)).toBeCloseTo(40.5, 9);
+    expect(tl.positionAt(5.9)).toBeCloseTo(41.9, 9);
+  });
 });

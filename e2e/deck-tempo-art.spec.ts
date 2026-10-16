@@ -47,6 +47,7 @@ test("a fast backward flick of the jog wheel spins the song back and drops the c
   const cued = (await deckStates(page)).find((d) => d.startsWith("B:"))!.split(" ").at(-1);
 
   const jog = page.getByRole("slider", { name: "Song position, Deck A" });
+  await jog.scrollIntoViewIfNeeded();
   const box = (await jog.boundingBox())!;
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;
@@ -81,9 +82,9 @@ test("the jog wheel shows the song's cover art (initials without one); BPM sits 
   makeArtFixture();
   await loadLibrary(page, [FIXTURE_DIR, ART_DIR]);
   await page.click("nav >> text=Booth");
-  await deck(page, "A").getByRole("button", { name: "Load track" }).click();
+  await page.getByRole("button", { name: "Load track, Deck A" }).click();
   await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Cover Groove" }).getByRole("button").last().click();
-  await deck(page, "B").getByRole("button", { name: "Load track" }).click();
+  await page.getByRole("button", { name: "Load track, Deck B" }).click();
   await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove A" }).getByRole("button").last().click();
 
   const cover = deck(page, "A").locator("img");

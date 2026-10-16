@@ -105,20 +105,34 @@ export function Guide() {
         </Section>
 
         <Section id="booth" title="The booth at a glance">
+          <p>
+            The booth is laid out like a <B>Pioneer DDJ-FLX4</B> controller, with the software&apos;s screen above it.
+          </p>
           <ul className="list-disc space-y-1.5 pl-5">
             <li>
-              <B>Mood</B> buttons along the top.
+              <B>Screen</B> (top): the <B>Mood</B> buttons, the <B>Track view</B>, the bar &amp; phrase counter with notes, <B>Up next</B>{" "}
+              (which song, how it mixes, and when) and the request <B>Queue</B>.
             </li>
             <li>
-              <B>Decks</B> on each side: a spinning jog wheel with the song&apos;s cover art, its tempo slider, a volume bar and bass light, the
-              title, key, BPM and time, and the song&apos;s overview (green blocks = full sections, gaps = breakdowns, ⚑ = where it will start).
-              The badge says what the deck is doing: <B>On air</B>, <B>Cued</B> (comes in next), <B>Mixing in / out</B>, <B>Paused</B>,{" "}
-              <B>Standby</B> (spare song), <B>Loaded</B> (before Play) or <B>Empty</B>.
+              <B>Decks</B> left (A) and right (B), each like the controller&apos;s: the <B>loop section</B> (IN, OUT, 4 BEAT / EXIT, ½, 2×) and{" "}
+              <B>BEAT SYNC</B> along the top; a small display with the song, key, BPM, time, its overview (green blocks = full sections, gaps
+              = breakdowns, ⚑ = where it will start), Start from and ⏏ eject; the <B>jog wheel</B> with the <B>tempo slider</B> on its right;
+              and at the bottom the round <B>CUE</B> and <B>▶ Play / ⏸ Pause</B> buttons beside the <B>pad modes</B> (HOT CUE, BEAT LOOP,
+              SAVED) and 8 pads. The badge says what the deck is doing: <B>On air</B>, <B>Cued</B> (comes in next), <B>Mixing in / out</B>,{" "}
+              <B>Playing along</B>, <B>Paused</B>, <B>Standby</B> (spare song), <B>Loaded</B> (before Play) or <B>Empty</B>.
             </li>
             <li>
-              In the middle: <B>Play / Stop</B>, the <B>AI DJ</B> switch, <B>Drop</B>, the <B>Effects</B> pad, the level meter, <B>Volume</B>, the bar &amp;
-              phrase counter, <B>Up next</B> (which song, how it mixes, and when) and the request <B>Queue</B>.
+              <B>Mixer</B> in the middle: <B>MASTER</B> (club speakers) and <B>PHONES</B> (headphones) volume knobs either side of the set&apos;s{" "}
+              <B>Play / Stop</B>, the master level, a <B>LOAD</B> button per deck, then per channel <B>TRIM, HI, MID, LOW</B> and{" "}
+              <B>CFX</B>, <B>🎧 CUE</B> and <B>Set start here</B>, the channel faders with their level meters, and the crossfader. Down the
+              middle: the <B>AI DJ</B> switch, <B>Drop</B> and <B>Beat FX</B>.
             </li>
+            <li>
+              The EQ, CFX and trim knobs, the channel faders and the crossfader <B>move by themselves</B>: they show what the auto-DJ is doing
+              (matching loudness, swapping basslines, filter sweeps, fading songs in and out). You turn only MASTER and PHONES — the auto-DJ
+              does the mixing.
+            </li>
+            <li>With 3 or 4 decks, decks C and D sit below with their own LOAD and 🎧 CUE.</li>
             <li>The background pulses with the beat in the mood&apos;s colour.</li>
           </ul>
         </Section>
@@ -197,7 +211,7 @@ export function Guide() {
 
         <Section id="load" title="Loading decks before Play">
           <p>
-            Before pressing Play you can choose the first songs yourself: <B>Load track</B> on a deck, pick a song. Deck A plays first, then
+            Before pressing Play you can choose the first songs yourself: <B>LOAD</B> for a deck (in the mixer), pick a song. Deck A plays first, then
             B, C, D in order; after them the auto-DJ carries on. Or press <B>▶ Play</B> on a loaded deck: the set starts with that
             deck&apos;s song, on that deck. <B>Change</B> or <B>Eject</B> to undo.
           </p>
@@ -216,12 +230,12 @@ export function Guide() {
                 "Brings the next song in on its drop, on the next 4-bar phrase (about 6–13 s), with a build-up and a riser. With both decks playing (▶ on the cued deck), Drop swaps them on the next phrase — also when one of them is paused. Greyed out while a mix is already running, and when nothing is playing.",
               ],
               [
-                "Effects",
+                "Beat FX (mixer)",
                 "Echo, Filter, Reverb and Riser on the whole mix, starting on the next beat (the riser on the next bar). In Groove, Peak Hour and Desi Night the auto-DJ also adds effects itself as songs change — the pad lights up, marked “auto”.",
               ],
               [
-                "Change track",
-                "On the cued deck: choose the song that comes in next. The picker lists the best fits for the mood first (▶ previews a song on the headphones; “tempo jump” means it will echo out rather than blend).",
+                "LOAD (mixer)",
+                "For the cued deck (it says Change track): choose the song that comes in next. The picker lists the best fits for the mood first (▶ previews a song on the headphones; “tempo jump” means it will echo out rather than blend).",
               ],
               ["Add track / Queue", "Requests that play after the next song, in order. Remove one with ✕. The queue survives a reload."],
               ["Up next", "The next song, how it will mix in, and the countdown to the mix (then its progress)."],
@@ -251,7 +265,7 @@ export function Guide() {
                 "Works like a CDJ's. While the deck plays: back to the cue point, stopped there. Stopped somewhere else (paused, or moved with the wheel or a cue pad): that spot becomes the cue point. Stopped at the cue point: it plays from there while you hold CUE and goes back when you let go — press ▶ while holding and it keeps playing. A song's cue point starts where it began playing; on the cued deck it is the start point, so holding CUE plays the cued song from there on the speakers.",
               ],
               [
-                "🎧 Listen",
+                "🎧 CUE (mixer)",
                 "Plays the cued (or loaded) song on the headphones only — the club hears nothing. Set start here makes the spot you're hearing the start point. Needs a separate preview output during a set (Library → Audio outputs).",
               ],
               [
@@ -332,8 +346,8 @@ export function Guide() {
 
         <Section id="pads" title="Cue pads">
           <p>
-            Each loaded, cued and on-air deck has 8 pads, <B>A–H</B>. They are saved with the song, so they are there the next time it plays,
-            and the overview marks them with their letter.
+            Each deck&apos;s 8 pads in <B>HOT CUE</B> mode (the default) are its cue pads, <B>A–H</B>. They are saved with the song, so they
+            are there the next time it plays, and the overview marks them with their letter.
           </p>
           <Dl
             items={[
@@ -354,9 +368,10 @@ export function Guide() {
 
         <Section id="loops" title="Loops">
           <p>
-            Every deck has <B>Loop</B> buttons: <B>¼, ½, 1, 2, 4, 8, 16 beats</B>. Press one and the song repeats that many beats,
-            starting on the beat it&apos;s in, so it stays in time. The lit button is the loop playing: press another length to change it, or
-            press the lit one (or <B>Exit loop</B>) to let the song carry on from there.
+            The <B>loop section</B> along the top of each deck: <B>4 BEAT</B> loops 4 beats from the beat the song is on (it then says{" "}
+            <B>EXIT</B>: press it to let the song carry on), <B>◀ ½</B> and <B>2× ▶</B> halve or double the loop playing, and <B>IN</B> then{" "}
+            <B>OUT</B> loop by hand between two beats. In <B>BEAT LOOP</B> pad mode the 8 pads are loops of <B>¼, ½, 1, 2, 4, 8, 16 and 32
+            beats</B>: the lit pad is the loop playing — press another length to change it, or the lit one to let it go.
           </p>
           <ul className="list-disc space-y-1.5 pl-5">
             <li>
@@ -364,7 +379,7 @@ export function Guide() {
               <B>▶</B> and it comes in looping, for as long as you like. Press <B>Drop</B> to let the loop go and mix.
             </li>
             <li>
-              <B>Saved loops</B> (L1–L4) appear as buttons under the loop lengths when the song has them. On the song on air, a saved loop
+              <B>Saved loops</B> (L1–L4, made in the track editor) are the pads in <B>SAVED</B> pad mode. On the song on air, a saved loop
               loops there (if the song is already past it, it jumps there on the beat); on the cued song it is armed, and the song starts from it.
             </li>
             <li>The auto-DJ&apos;s next mix waits while the song on air loops (Up next says &quot;After the loop&quot;) and is planned again when it ends.</li>
@@ -381,7 +396,7 @@ export function Guide() {
         <Section id="headphones" title="Headphones: Cue and previews">
           <ul className="list-disc space-y-1.5 pl-5">
             <li>
-              <B>🎧 Cue</B> on a loaded or cued deck plays it in your headphones from where it will start. <B>Set start here</B> makes the
+              <B>🎧 CUE</B> in the mixer, under each channel, plays a loaded or cued deck in your headphones from where it will start. <B>Set start here</B> makes the
               current cue position its start.
             </li>
             <li>
@@ -397,8 +412,9 @@ export function Guide() {
 
         <Section id="volume" title="Volume">
           <p>
-            Under the level meter: <B>Club speakers</B> (the mix, including scratches) and <B>Headphones</B> (Cue and previews). Both are
-            saved, and the same sliders are under each output on the Library page. Each output&apos;s Test sound plays at its volume.
+            The two knobs at the top of the mixer: <B>MASTER</B> (club speakers — the mix, including scratches) and <B>PHONES</B>{" "}
+            (headphones — 🎧 CUE and previews). Drag a knob up or down, scroll on it, or click it and use the arrow keys. Both are saved, and
+            the same volumes are sliders under each output on the Library page. Each output&apos;s Test sound plays at its volume.
           </p>
           <p>
             Turning the club volume to 0 is safe: the set keeps running (the booth warns &quot;Volume is at 0&quot;), and it is not mistaken for

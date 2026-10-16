@@ -1,16 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { VolumeSlider } from "@/components/VolumeSlider";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { SCHEDULE_MARGIN, STOP_FADE_SECONDS, type AutoDJStatus } from "@/lib/dj/autodj";
 import { cuePlan, firstStart, resolveEntry } from "@/lib/dj/cues";
 import { gridPosition, PHRASE_BARS } from "@/lib/dj/mixpoints";
 
-import type { Track, TransitionKind } from "@/lib/types";
+import type { EntryChoice, Track, TransitionKind } from "@/lib/types";
 import { previewIsSeparate, readyTracks, useLibrary, useMoods } from "@/store/library";
 import { useSession } from "@/store/session";
 import { DeckPanel, type DeckRole } from "./DeckPanel";
+import { ListenButtons, LoadButton, Mixer, type Channel } from "./Mixer";
 import { TrackStack, type StackRow } from "./TrackStack";
 import { formatTime, setText, useBoothFrame } from "./frame";
 import { FxPad } from "./FxPad";
@@ -95,33 +95,37 @@ export function Booth() {
     if (!track || (role !== "live" && role !== "incoming")) return { deck: i, track: null, role };
     return { deck: i, track, role, startAt: role === "incoming" ? status.next?.startAt : undefined };
   });
-  const decks = Array.from({ length: deckCount }, (_, i) => {
-    // Before Play, staff can load a song into any deck (Deck A plays first, the rest next in order).
-    const preload = !status.playing && !starting ? (preloads[i] ?? null) : null;
+  // Each deck's panel props and its mixer channel (LOAD, 🎧 CUE). Before Play staff can load a song into any
+  // deck (Deck A plays first, the rest next in order).
+  const setup = Array.from({ length: deckCount }, (_, i): { panel: Parameters<typeof DeckPanel>[0]; channel: Channel } => {
     if (!status.playing && !starting) {
-      return (
-        <DeckPanel
-          key={i}
-          deck={i}
-          role={preload ? "loaded" : "idle"}
-          track={preload?.track ?? null}
-          color={color}
-          onChoose={canPlay ? { label: preload ? "Change" : "Load track", open: () => setPicker({ next: false, loadDeck: i }) } : undefined}
-          onEject={preload ? () => ejectDeck(i) : undefined}
-          entry={
-            preload
-              ? {
-                  choice: preload.entry,
-                  // Deck A: where the set starts. Later decks: where they'll come in (before any build-up).
-                  startAt: preloadStart(i, preload),
-                  set: (choice) => setPreloadEntry(i, choice),
-                }
-              : undefined
+      const preload = preloads[i] ?? null;
+      const entry = preload
+        ? {
+            choice: preload.entry,
+            // Deck A: where the set starts. Later decks: where they'll come in (before any build-up).
+            startAt: preloadStart(i, preload),
+            set: (choice: EntryChoice) => setPreloadEntry(i, choice),
           }
-          cue={preload ? { plan: cuePlan(preload.track, preload.entry, i === 0, !!mood.opener), blocked: false } : undefined}
-          onStart={preload && canPlay ? () => void play(i) : undefined}
-        />
-      );
+        : undefined;
+      return {
+        panel: {
+          deck: i,
+          role: preload ? "loaded" : "idle",
+          track: preload?.track ?? null,
+          color,
+          onEject: preload ? () => ejectDeck(i) : undefined,
+          entry,
+          onStart: preload && canPlay ? () => void play(i) : undefined,
+        },
+        channel: {
+          deck: i,
+          track: preload?.track ?? null,
+          choose: canPlay ? { label: preload ? "Change" : "Load track", open: () => setPicker({ next: false, loadDeck: i }) } : undefined,
+          cue: preload ? { plan: cuePlan(preload.track, preload.entry, i === 0, !!mood.opener), blocked: false } : undefined,
+          entry,
+        },
+      };
     }
     const { role, track } = deckRole(status, i);
     const choose =
@@ -130,17 +134,16 @@ export function Booth() {
         : role === "standby"
           ? { label: "Queue track", open: () => setPicker({ next: false }) }
           : { label: track ? "Change track" : "Choose track", open: () => setPicker({ next: true }) };
-    return (
-      <DeckPanel
-        key={i}
-        deck={i}
-        role={role}
-        track={track}
-        color={color}
-        onChoose={choose}
-        keyLock={status.playing && status.keyLock}
-        entry={role === "incoming" && status.next && !stopping ? { choice: status.next.entry, startAt: status.next.startAt, set: setEntry } : undefined}
-        transport={
+    const entry = role === "incoming" && status.next && !stopping ? { choice: status.next.entry, startAt: status.next.startAt, set: setEntry } : undefined;
+    return {
+      panel: {
+        deck: i,
+        role,
+        track,
+        color,
+        keyLock: status.playing && status.keyLock,
+        entry,
+        transport:
           status.playing && !stopping
             ? {
                 setPaused: status.silent,
@@ -148,45 +151,73 @@ export function Booth() {
                 tempo: role === "incoming" ? status.next?.tempo : undefined,
                 cuePoint: status.cuePoints[i] ?? null,
               }
-            : undefined
-        }
-        cue={
-          role === "incoming" && status.next && !stopping
-            ? { plan: cuePlan(status.next.track, status.next.entry, false), blocked: !previewSeparate }
-            : undefined
-        }
-      />
-    );
+            : undefined,
+      },
+      channel: {
+        deck: i,
+        track,
+        choose,
+        cue: role === "incoming" && status.next && !stopping ? { plan: cuePlan(status.next.track, status.next.entry, false), blocked: !previewSeparate } : undefined,
+        entry,
+      },
+    };
   });
+  // Decks C and D (3–4 decks): the mixer has two channels, so they carry their own LOAD and 🎧 CUE.
+  const deckPanel = (i: number) => (
+    <DeckPanel
+      key={i}
+      {...setup[i].panel}
+      strip={
+        i >= 2 ? (
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <LoadButton channel={setup[i].channel} />
+            <ListenButtons channel={setup[i].channel} />
+          </div>
+        ) : undefined
+      }
+    />
+  );
 
-  const centre = (
-    <section className="flex flex-col items-center gap-5">
-      <PlayStopButton
-        playing={status.playing}
-        starting={starting}
-        stopping={stopping}
-        disabled={!canPlay}
-        onPlay={() => void play()}
-        onStop={stop}
-      />
-      <AiDjSwitch on={status.auto} disabled={!status.playing || stopping} color={color} />
-      <DropButton status={status} live={live} color={color} />
-      <FxPad enabled={live && !!status.now} color={color} />
-      <LevelMeter color={color} />
-      <VolumeControl color={color} playing={status.playing} />
-      <BeatCounter deck={status.now?.deck ?? null} track={status.now?.track ?? null} color={color} />
-      {!canPlay && hydrated && (
-        <p className="text-center text-muted">
-          {folderState === "none" && ready === 0 ? "No music folder connected. " : `Only ${ready} analysed track${ready === 1 ? "" : "s"}. `}
-          <Link href="/library" className="text-accent underline">
-            Open the library
-          </Link>
-        </p>
-      )}
-      {/* Notes keep their space (two lines) so the column never jumps when one comes or goes. */}
-      <div className="min-h-[2.75rem] w-full text-center text-sm" aria-live="polite">
-        {status.error && <p className="text-bad">{status.error}</p>}
-        {status.note && <p className="text-warn">{status.note}</p>}
+  const mixer = (
+    <Mixer
+      channels={[setup[0].channel, setup[1].channel]}
+      color={color}
+      playing={status.playing}
+      playStop={
+        <PlayStopButton
+          playing={status.playing}
+          starting={starting}
+          stopping={stopping}
+          disabled={!canPlay}
+          onPlay={() => void play()}
+          onStop={stop}
+        />
+      }
+      meterBar={<LevelMeter color={color} />}
+      aiDj={<AiDjSwitch on={status.auto} disabled={!status.playing || stopping} color={color} />}
+      drop={<DropButton status={status} live={live} color={color} />}
+      fx={<FxPad enabled={live && !!status.now} color={color} />}
+    />
+  );
+
+  // The software's screen above the controller: what's playing, what's next, the queue and notes.
+  const screen = (
+    <section aria-label="Set" className="grid gap-4 lg:grid-cols-[auto_1fr_1fr]">
+      <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-border bg-surface/80 p-4 backdrop-blur">
+        <BeatCounter deck={status.now?.deck ?? null} track={status.now?.track ?? null} color={color} />
+        {/* Notes have a fixed space (three lines; longer ones are cut) so the booth never jumps when one comes or goes. */}
+        <div className="h-[3.75rem] w-72 overflow-hidden text-center text-sm leading-5" aria-live="polite">
+          {status.error && <p className="text-bad">{status.error}</p>}
+          {status.note && <p className="text-warn">{status.note}</p>}
+          {!canPlay && hydrated && (
+            <p className="text-muted">
+              {folderState === "none" && ready === 0 ? "No music folder connected. " : `Only ${ready} analysed track${ready === 1 ? "" : "s"}. `}
+              <Link href="/library" className="text-accent underline">
+                Open the library
+              </Link>
+            </p>
+          )}
+        </div>
       </div>
       <NextMix status={status} color={color} />
       <Queue status={status} enabled={canPlay} onAdd={() => setPicker({ next: false })} />
@@ -262,18 +293,15 @@ export function Booth() {
 
       <TrackStack rows={stackRows} color={color} />
 
-      {deckCount === 2 ? (
-        <div className="grid items-start gap-6 lg:grid-cols-[1fr_minmax(15rem,18rem)_1fr]">
-          {decks[0]}
-          <div className="order-first lg:order-none">{centre}</div>
-          {decks[1]}
-        </div>
-      ) : (
-        <>
-          {centre}
-          <div className={`grid gap-6 sm:grid-cols-2 ${deckCount === 3 ? "lg:grid-cols-3" : "lg:grid-cols-4"}`}>{decks}</div>
-        </>
-      )}
+      {screen}
+
+      {/* The controller, laid out like a DDJ-FLX4: Deck A · mixer · Deck B (decks C and D below). */}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem_minmax(0,1fr)]">
+        {deckPanel(0)}
+        {mixer}
+        {deckPanel(1)}
+      </div>
+      {deckCount > 2 && <div className="grid items-start gap-4 lg:grid-cols-2">{setup.slice(2).map((_, k) => deckPanel(k + 2))}</div>}
 
       <footer className="mt-auto text-center text-xs text-muted">
         {ready} tracks ready
@@ -336,7 +364,7 @@ function PlayStopButton({
   const label = starting ? "Starting…" : stopping ? "Stopping…" : playing ? "Stop" : "Play";
   const tint = stopping ? "#9a9aae" : stopLook ? "#f87171" : "#34d399";
   return (
-    <div className="relative h-44 w-44">
+    <div className="relative h-28 w-28 shrink-0">
       {busy && (
         <svg viewBox="0 0 100 100" className={`absolute inset-0 -rotate-90 ${starting ? "animate-spin" : ""}`} aria-hidden>
           <circle cx="50" cy="50" r="48" fill="none" stroke="var(--surface-2)" strokeWidth="3" />
@@ -359,7 +387,7 @@ function PlayStopButton({
         disabled={disabled || busy}
         aria-busy={busy}
         onClick={() => (playing ? onStop() : onPlay())}
-        className={`absolute inset-2 flex flex-col items-center justify-center gap-1 rounded-full text-2xl font-bold text-black transition disabled:cursor-not-allowed ${
+        className={`absolute inset-1.5 flex flex-col items-center justify-center gap-0.5 rounded-full text-lg font-bold text-black transition disabled:cursor-not-allowed ${
           busy ? "" : "disabled:opacity-40"
         }`}
         style={{
@@ -367,10 +395,10 @@ function PlayStopButton({
           boxShadow: busy ? "none" : `0 0 48px color-mix(in srgb, ${tint} 35%, transparent)`,
         }}
       >
-        <svg viewBox="0 0 24 24" className="h-8 w-8" aria-hidden>
+        <svg viewBox="0 0 24 24" className="h-6 w-6" aria-hidden>
           {stopLook || stopping ? <rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" /> : <path d="M7 4.5v15l13-7.5z" fill="currentColor" />}
         </svg>
-        <span className={busy ? "text-lg" : ""}>{label}</span>
+        <span className={busy ? "text-sm" : ""}>{label}</span>
       </button>
     </div>
   );
@@ -409,7 +437,7 @@ function DropButton({ status, live, color }: { status: AutoDJStatus; live: boole
       onClick={drop}
       disabled={disabled}
       title="Bring the next track in on its drop"
-      className="h-16 w-56 rounded-full border-2 text-xl font-bold uppercase tracking-[0.2em] transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-35"
+      className="h-14 w-full rounded-full border-2 text-lg font-bold uppercase tracking-[0.2em] transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-35"
       style={{
         borderColor: color,
         color: dropping ? "#07070b" : color,
@@ -583,27 +611,6 @@ function Queue({ status, enabled, onAdd }: { status: AutoDJStatus; enabled: bool
   );
 }
 
-/** Two volumes: the club speakers (the mix) and the headphones (Cue and previews). Both are saved. */
-function VolumeControl({ color, playing }: { color: string; playing: boolean }) {
-  const volume = useLibrary((s) => s.settings.volume);
-  const previewVolume = useLibrary((s) => s.settings.previewVolume);
-  const setVolume = useSession((s) => s.setVolume);
-  const setPreviewVolume = useLibrary((s) => s.setPreviewVolume);
-  return (
-    <section aria-label="Volume" className="flex w-56 flex-col gap-2">
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted">Volume</h2>
-      <VolumeSlider
-        label="Club speakers"
-        value={volume}
-        onChange={setVolume}
-        color={color}
-        warning={playing ? "Volume is at 0 — the club hears nothing" : ""}
-      />
-      <VolumeSlider label="Headphones" value={previewVolume} onChange={setPreviewVolume} color={color} />
-    </section>
-  );
-}
-
 /**
  * AI DJ mode. On: the auto-DJ mixes songs nobody has touched (once staff play,
  * pause or cue a song, that one plays to its end). Off: it still cues the best
@@ -612,7 +619,7 @@ function VolumeControl({ color, playing }: { color: string; playing: boolean }) 
 function AiDjSwitch({ on, disabled, color }: { on: boolean; disabled: boolean; color: string }) {
   const setAuto = useSession((s) => s.setAuto);
   return (
-    <div className="flex w-56 flex-col items-center gap-1">
+    <div className="flex w-full flex-col items-center gap-1">
       <button
         type="button"
         role="switch"
@@ -620,7 +627,7 @@ function AiDjSwitch({ on, disabled, color }: { on: boolean; disabled: boolean; c
         aria-label="AI DJ"
         disabled={disabled}
         onClick={() => setAuto(!on)}
-        className="flex h-12 w-full items-center justify-between rounded-2xl border px-4 font-bold transition disabled:opacity-40"
+        className="flex h-11 w-full items-center justify-between rounded-xl border px-3 text-sm font-bold transition disabled:opacity-40"
         style={on ? { borderColor: color, background: `color-mix(in srgb, ${color} 20%, var(--surface))` } : { borderColor: "var(--warn)", background: "color-mix(in srgb, var(--warn) 12%, var(--surface))" }}
       >
         <span>AI DJ</span>
@@ -650,7 +657,7 @@ function LevelMeter({ color }: { color: string }) {
     if (bar.current) bar.current.style.transform = `scaleX(${Math.min(1, level() * 4)})`;
   });
   return (
-    <div className="h-2 w-56 overflow-hidden rounded-full bg-surface-2" aria-hidden>
+    <div className="h-2 w-full overflow-hidden rounded-full bg-[#050506]" aria-hidden title="Master level">
       <div
         ref={bar}
         className="h-full origin-left"

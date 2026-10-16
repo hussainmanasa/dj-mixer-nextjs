@@ -11,6 +11,7 @@ const played = async (page: Page, letter: string) => {
 
 /** Press and hold a button with the mouse (until `page.mouse.up()`). */
 async function hold(page: Page, button: Locator) {
+  await button.scrollIntoViewIfNeeded();
   const box = (await button.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
@@ -18,6 +19,7 @@ async function hold(page: Page, button: Locator) {
 
 /** Turn a jog wheel `turns` times forward and let go. */
 async function spin(page: Page, jog: Locator, turns: number) {
+  await jog.scrollIntoViewIfNeeded();
   const box = (await jog.boundingBox())!;
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;
@@ -148,12 +150,13 @@ test("nothing is locked during the auto-DJ's own mix: loops, tempo, cue pads and
   // During the mix every control on both decks is enabled.
   for (const l of ["A", "B"]) {
     await expect(deck(page, l).getByRole("slider", { name: `Tempo, Deck ${l}` })).toBeEnabled();
-    await expect(deck(page, l).getByRole("button", { name: `Loop 4 beats, Deck ${l}` })).toBeEnabled();
+    await expect(deck(page, l).getByRole("button", { name: `4-beat loop, Deck ${l}` })).toBeEnabled();
     await expect(deck(page, l).getByRole("button", { name: `Save cue A, Deck ${l}` })).toBeEnabled();
     await expect(deck(page, l).getByRole("button", { name: `Cue Deck ${l}` })).toBeEnabled();
     await expect(deck(page, l).getByRole("button", { name: `Pause Deck ${l}` })).toBeEnabled();
   }
-  // A loop on the incoming song, mid-mix: it loops.
+  // A loop on the incoming song, mid-mix (the pads' BEAT LOOP mode): it loops.
+  await deck(page, "B").getByRole("button", { name: "Beat loop pads, Deck B" }).click();
   await deck(page, "B").getByRole("button", { name: "Loop 4 beats, Deck B" }).click();
   await expect(deck(page, "B").getByRole("button", { name: "Loop 4 beats, Deck B" })).toHaveAttribute("aria-pressed", "true");
   // ⏸ on the song going out, mid-mix: just that deck stops; the incoming one plays on.
@@ -174,7 +177,7 @@ test("before the set, ▶ on a loaded deck starts the set with that song, on tha
   await page.click("nav >> text=Booth");
   await page.getByRole("button", { name: /^Groove/ }).click();
   await expect(deck(page, "B").getByRole("button", { name: "Play Deck B" })).toBeDisabled();
-  await deck(page, "B").getByRole("button", { name: "Load track" }).click();
+  await page.getByRole("button", { name: "Load track, Deck B" }).click();
   await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove C" }).getByRole("button").last().click();
   await deck(page, "B").getByRole("button", { name: "Play Deck B" }).click();
   await expect.poll(() => states(page), { timeout: 30_000 }).toMatch(/A:Cued.*B:On air .*Test Groove C/);

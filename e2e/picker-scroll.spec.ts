@@ -12,7 +12,7 @@ test("while the track picker is open the booth behind it doesn't scroll", async 
   await expect.poll(scrollY).toBeGreaterThan(0);
   await page.evaluate(() => window.scrollTo(0, 0));
 
-  await page.getByRole("region", { name: "Deck A" }).getByRole("button", { name: "Load track" }).click();
+  await page.getByRole("button", { name: "Load track, Deck A" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
   const before = await scrollY();
