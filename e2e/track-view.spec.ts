@@ -55,10 +55,11 @@ test("track view: the decks' songs one below another, with waveform, beats, bar 
 
   // Zoom.
   await page.getByRole("button", { name: "Zoom in" }).click();
-  await expect(page.getByRole("region", { name: "Track view" })).toContainText("4 s");
+  // + zooms in: the level goes up (8 s across → 4 s: 4× → 8×).
+  await expect(page.getByRole("region", { name: "Track view" })).toContainText("8×");
   await page.getByRole("button", { name: "Zoom out" }).click();
   await page.getByRole("button", { name: "Zoom out" }).click();
-  await expect(page.getByRole("region", { name: "Track view" })).toContainText("16 s");
+  await expect(page.getByRole("region", { name: "Track view" })).toContainText("2×");
 
   // Playing together (beat-matched) both rows count the same beat.
   await page.getByRole("region", { name: "Deck B" }).getByRole("button", { name: "Play Deck B" }).click();

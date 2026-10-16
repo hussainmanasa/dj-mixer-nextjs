@@ -64,6 +64,8 @@ const KEYLOCK_SWITCH_FADE = 0.04;
 const RESUME_FADE = 0.3;
 /** A hand on the jog wheel of the song on air stops it (and letting go starts it) this fast, like a record. */
 const HOLD_FADE = 0.012;
+/** An ejected deck stays empty until this long (s) before the song on air ends; then the auto-DJ fills it. */
+const EJECT_REFILL_SECONDS = 30;
 /** Staff's fader / crossfader below this gain on the song on air: a deliberate silence (the watchdog waits). */
 const STAFF_MUTED = 0.03;
 /** CUE on a stopped deck within this of its cue point (seconds) plays it; further away, it sets a new one. */
@@ -324,6 +326,8 @@ export class AutoDJ {
   private armed = new Map<string, { start: number; end: number; beats: number | null }>();
   /** Cue points set with CUE (track seconds), per deck; a different song on the deck has its own. */
   private cuePoints = new Map<Deck, { trackId: string; at: number }>();
+  /** Staff ejected the next song: the auto-DJ leaves its deck empty until LOAD, or until the song on air nears its end. */
+  private ejectHold: ReturnType<typeof setInterval> | null = null;
   /** CUE is held on this deck: it plays from the cue point `at` until let go (`cued`: it was the cued song). */
   private cueHeld: { deck: Deck; at: number; cued: boolean } | null = null;
   /** AI DJ mode (see AutoDJStatus.auto). */
@@ -499,6 +503,7 @@ export class AutoDJ {
     this.armed.clear();
     this.cuePoints.clear();
     this.cueHeld = null;
+    this.endEjectHold();
     await this.engine.fadeOutAndStop(STOP_FADE_SECONDS);
     for (const d of this.engine.decks) d.unload();
     this.current = null;
@@ -836,6 +841,57 @@ export class AutoDJ {
     if (!l) return;
     this.armed.delete(track.id);
     if (deck.setLoop(l.start, l.end)) this.loops.set(deck, l);
+  }
+
+  // ── Eject ────────────────────────────────────────────────────────────────────
+
+  /**
+   * ⏏ on a deck that isn't playing — the cued song, or a song stopped beside the one on air — takes its song off,
+   * like a CDJ (a playing song can't be ejected). The deck stays empty until staff LOAD a song; the auto-DJ fills it
+   * by itself only when the song on air is EJECT_REFILL_SECONDS from its end, so the music never stops.
+   */
+  eject(index: number): boolean {
+    const p = this.planned;
+    const deck = this.engine.decks[index];
+    if (!this.playing || !p || !deck || p.deck !== deck || this.recovering) return false;
+    if (!this.isCued(p) && !(this.isPair(p) && this.pausedAlong)) return false;
+    if (this.cueHeld?.deck === deck) this.cueHeld = null;
+    clearTimeout(p.timer);
+    clearTimeout(p.layer?.endTimer);
+    this.loops.delete(deck);
+    this.armed.delete(p.track.id);
+    this.pausedAlong = null;
+    this.cancelTransitionFx(p);
+    deck.unload();
+    deck.resetControls(0);
+    this.planned = null;
+    // The song on air plays on at full level, untouched by the mix that was planned.
+    this.current?.deck.resetControls(1);
+    this.dropRequested = false;
+    this.note = `Deck ${"ABCD"[index]} is empty — LOAD a song, or the auto-DJ picks one before this song ends`;
+    this.endEjectHold();
+    this.ejectHold = setInterval(() => this.checkEjectHold(), 1000);
+    this.checkEjectHold();
+    this.emit();
+    return true;
+  }
+
+  /** While a deck is ejected: fill it once the song on air is near its end (it's playing, not looping). */
+  private checkEjectHold(): void {
+    const cur = this.current;
+    const tl = cur?.deck.timeline;
+    const a = cur?.track.analysis;
+    if (!this.ejectHold || !this.playing || !cur || !tl || !a) return;
+    if (this.paused || this.loops.has(cur.deck)) return;
+    if (tl.timeAt(a.duration) - this.engine.now > EJECT_REFILL_SECONDS) return;
+    this.endEjectHold();
+    if (this.note?.includes("is empty")) this.note = null;
+    void this.planNext();
+  }
+
+  private endEjectHold(): void {
+    if (this.ejectHold) clearInterval(this.ejectHold);
+    this.ejectHold = null;
   }
 
   // ── The staff mixer (owner decision: the knobs, faders and crossfader work) ──
@@ -1343,6 +1399,8 @@ export class AutoDJ {
    */
   request(track: Track, next: boolean): void {
     if (track.status !== "ready" || !track.analysis || track.id === this.current?.track.id) return;
+    // LOAD into an ejected deck: it's filled now.
+    this.endEjectHold();
     this.requests = this.requests.filter((t) => t.id !== track.id);
     const p = this.planned;
     // It replaces the next song while that one isn't playing (cued, or stopped beside the song on air).
@@ -1489,7 +1547,7 @@ export class AutoDJ {
   }
 
   private async planNext(): Promise<void> {
-    if (!this.playing || !this.current || this.planned || this.planning) return;
+    if (!this.playing || !this.current || this.planned || this.planning || this.ejectHold) return;
     this.planning = true;
     const gen = this.generation;
     try {
@@ -2032,6 +2090,7 @@ export class AutoDJ {
       deck.start(when, defaultStart(next.track), 1);
       this.pausedAlong = null;
       this.cueHeld = null;
+      this.endEjectHold();
       this.current = { deck, track: next.track, startedAt: when, from: defaultStart(next.track) };
       this.remember(next.track);
       this.deps.onPlayed?.(next.track, "recovery", next.requested, this.mood.id);

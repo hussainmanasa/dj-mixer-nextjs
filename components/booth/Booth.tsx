@@ -133,6 +133,8 @@ export function Booth() {
         color,
         keyLock: status.playing && status.keyLock,
         entry,
+        // ⏏ during the set: the next song's deck (the panel greys it out while that song plays).
+        onEject: role === "incoming" && !stopping ? () => ejectDeck(i) : undefined,
         transport:
           status.playing && !stopping
             ? {
@@ -192,7 +194,7 @@ export function Booth() {
 
   // Notes from the auto-DJ (and the library link), in a fixed-height strip so the booth never jumps.
   const notes = (
-    <div className="h-6 truncate text-center text-sm" aria-live="polite">
+    <div className="h-5 truncate text-center text-sm leading-5" aria-live="polite">
       {status.error && <span className="text-bad">{status.error} </span>}
       {status.note && <span className="text-warn">{status.note} </span>}
       {!canPlay && hydrated && (
@@ -207,7 +209,8 @@ export function Booth() {
   );
 
   return (
-    <main className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col gap-8 px-6 py-8" style={{ "--mood": color } as CSSProperties}>
+    // One gap (1 rem) between every block: mood, track view, decks.
+    <main className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col gap-4 px-6 py-8" style={{ "--mood": color } as CSSProperties}>
       <BeatPulse deck={status.now?.deck ?? null} track={status.now?.track ?? null} color={color} />
       {picker && <TrackPicker next={picker.next} loadDeck={picker.loadDeck} color={color} onClose={closePicker} />}
 
@@ -273,9 +276,7 @@ export function Booth() {
         </div>
       </section>
 
-      <TrackStack rows={stackRows} color={color} />
-
-      {notes}
+      <TrackStack rows={stackRows} color={color} notes={notes} />
 
       {/* The controller, laid out like a DDJ-FLX4: Deck A · mixer · Deck B (decks C and D below). */}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem_minmax(0,1fr)]">

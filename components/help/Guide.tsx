@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { ContentsNav } from "./ContentsNav";
 
 // The in-app user guide (/help): everything staff and the venue admin need,
 // in plain words. A server component — static text, no audio. Keep it in step
@@ -38,15 +39,7 @@ export function Guide() {
     <main className="mx-auto grid w-full max-w-6xl flex-1 gap-10 px-6 py-8 lg:grid-cols-[14rem_1fr]">
       <nav aria-label="Contents" className="lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:self-start lg:overflow-auto">
         <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-muted">Contents</h2>
-        <ol className="space-y-1 text-sm">
-          {SECTIONS.map((s) => (
-            <li key={s.id}>
-              <a href={`#${s.id}`} className="block rounded-md px-2 py-1 text-muted hover:bg-surface-2 hover:text-foreground">
-                {s.title}
-              </a>
-            </li>
-          ))}
-        </ol>
+        <ContentsNav sections={SECTIONS} />
       </nav>
 
       <article className="min-w-0 max-w-3xl space-y-12 leading-relaxed">
@@ -162,8 +155,9 @@ export function Guide() {
             </li>
           </ul>
           <p>
-            Both rows use the same time scale, so during a mix you can watch the two songs&apos; beats land on the same lines. <B>− / +</B>{" "}
-            zooms (4, 8, 16 or 32 seconds across). A song&apos;s detailed waveform is prepared the first time it is on a deck (until then you see
+            Both rows use the same time scale, so during a mix you can watch the two songs&apos; beats land on the same lines. <B>+</B>{" "}
+            zooms in and <B>−</B> out; the number between them is the zoom level, 1× to 8× (1× shows 32 seconds across, 8× shows 4 —
+            hover it to see). A song&apos;s detailed waveform is prepared the first time it is on a deck (until then you see
             one block per bar) and kept for next time.
           </p>
         </Section>
@@ -272,6 +266,10 @@ export function Guide() {
                 "Plays the cued (or loaded) song on the headphones only — the club hears nothing. Set start here makes the spot you're hearing the start point. Needs a separate preview output during a set (Library → Audio outputs).",
               ],
               [
+                "⏏ Eject",
+                "Takes the song off a deck that isn't playing — before Play, the cued deck, or a deck you paused beside the song on air. The deck stays empty until you LOAD a song; if nobody does, the auto-DJ picks one about 30 seconds before the song on air ends, so the music never stops. Like a CDJ, a playing song (and the song on air) can't be ejected.",
+              ],
+              [
                 "When a song ends",
                 "With the other deck playing, that one simply plays on. With nothing else playing, the other deck's song starts at once — from its cue point, or where it was paused — so the music never stops by itself.",
               ],
@@ -295,6 +293,7 @@ export function Guide() {
               ["Paused", "Moves the spot ▶ will play from — you hear it scratch on the speakers, like a record under your hand — and it stays paused. Press CUE there to make it the cue point."],
             ]}
           />
+          <p>The track view, the deck&apos;s time and its overview follow the wheel as you turn it.</p>
           <h3 className="mt-6 text-lg font-semibold">Spinback</h3>
           <p>
             On the song on air, turn the wheel <B>backwards fast</B>; the song spins back like a record and the cued song drops in on its drop.
@@ -482,7 +481,7 @@ export function Guide() {
               ["Crates", "Your own groups, e.g. “Romantic” or “Punjabi”. Moods can be limited to crates."],
               [
                 "Song markers",
-                "Cue in, cue out, dialogue start/end and hook start/end, on the song's waveform. Cue in is where the song starts when the auto-DJ brings it in (Start from: Auto); cue out is where it hands over to the next song — the mix is timed so the hand-over lands there — instead of the auto-DJ's own guess (useful for long fade-outs or an outro you never want played). The top strip is the whole song (click to look there, double-click to listen); the big view below shows a few seconds with every beat. Drag a marker's handle to move it; drag the waveform (or swipe on a trackpad) to scroll; click to put the yellow cursor there and listen, then press Set here → Dialogue start / end, Hook start / end, Cue in or Cue out. − / + zooms (2–32 s). Cue in, cue out and the hook snap to the bar; the dialogue is exact. Mark now and the nudge buttons still work, and the analysis suggests a hook and a dialogue — Listen, then Use if it's right.",
+                "Cue in, cue out, dialogue start/end and hook start/end, on the song's waveform. Cue in is where the song starts when the auto-DJ brings it in (Start from: Auto); cue out is where it hands over to the next song — the mix is timed so the hand-over lands there — instead of the auto-DJ's own guess (useful for long fade-outs or an outro you never want played). The top strip is the whole song (click to look there, double-click to listen); the big view below shows a few seconds with every beat. Drag a marker's handle to move it; drag the waveform (or swipe on a trackpad) to scroll; click to put the yellow cursor there and listen, then press Set here → Dialogue start / end, Hook start / end, Cue in or Cue out. + zooms in, − out (1× to 16×; hover the level to see the seconds across). Cue in, cue out and the hook snap to the bar; the dialogue is exact. Mark now and the nudge buttons still work, and the analysis suggests a hook and a dialogue — Listen, then Use if it's right.",
               ],
               [
                 "Saved loops",

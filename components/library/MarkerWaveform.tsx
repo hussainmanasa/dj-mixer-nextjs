@@ -377,12 +377,19 @@ export function MarkerWaveform({
       />
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <div className="flex items-center gap-1" role="group" aria-label="Zoom">
-          <button type="button" className="btn h-8 w-8 px-0" disabled={zoom === ZOOMS.length - 1} onClick={() => setZoom(zoom + 1)} aria-label="Zoom out">
-            −
+          <button type="button" className="btn grid h-8 w-8 place-items-center p-0" disabled={zoom === ZOOMS.length - 1} onClick={() => setZoom(zoom + 1)} aria-label="Zoom out">
+            <svg viewBox="0 0 12 12" className="h-3 w-3" aria-hidden>
+              <path d="M2 6h8" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+            </svg>
           </button>
-          <span className="w-12 text-center font-mono text-xs text-muted">{ZOOMS[zoom]} s</span>
-          <button type="button" className="btn h-8 w-8 px-0" disabled={zoom === 0} onClick={() => setZoom(zoom - 1)} aria-label="Zoom in">
-            +
+          {/* The zoom level (so + goes up): the widest view is 1×; the tooltip says how many seconds fit across. */}
+          <span className="w-12 text-center font-mono text-xs text-muted" title={`${ZOOMS[zoom]} s across`}>
+            {ZOOMS[ZOOMS.length - 1] / ZOOMS[zoom]}×
+          </span>
+          <button type="button" className="btn grid h-8 w-8 place-items-center p-0" disabled={zoom === 0} onClick={() => setZoom(zoom - 1)} aria-label="Zoom in">
+            <svg viewBox="0 0 12 12" className="h-3 w-3" aria-hidden>
+              <path d="M2 6h8M6 2v8" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+            </svg>
           </button>
         </div>
         <span className="text-muted">

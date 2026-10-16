@@ -95,7 +95,8 @@ app/
   (admin)/library/page.tsx    music folder, analysis, deck count, key lock, track table + editor
   (admin)/moods/page.tsx      mood editor (presets + admin edits)
   (admin)/history/page.tsx    set log by night, CSV export
-  (admin)/help/page.tsx       user guide (components/help/Guide.tsx), linked from the nav as "Help"
+  (admin)/help/page.tsx       user guide (components/help/Guide.tsx), linked from the nav as "Help; its contents (ContentsNav) highlight
+                              the section being read"
   manifest.ts                 PWA manifest (kiosk install)
   icon.svg · apple-icon.png · favicon.ico   tab / home-screen icon (a record in the accent colours), drawn by
                               scripts/make-icons.mjs with public/icons/* for the manifest
@@ -197,6 +198,17 @@ the auto-DJ's fade as a tick from `DeckView.fader`, meters from `DeckView.level`
 the staff stage). `e2e/controller.spec.ts` checks the layout, the loop section and that every mixer control changes
 the sound.
 
+Eject (`AutoDJ.eject(i)`, `useSession.ejectDeck`; ⏏ in the deck display): before Play it clears the preload; during the
+set it takes the next song off its deck when that song isn't playing (cued, or paused beside the song on air — like a
+CDJ, a playing song can't be ejected; the deck on air never). The deck stays empty: `ejectHold` stops `planNext` until
+staff LOAD (`request` ends the hold) or the song on air is `EJECT_REFILL_SECONDS` (30 s) from its end
+(`checkEjectHold`, every second, not while paused or looping); Stop and recovery end it too. `e2e/eject.spec.ts`.
+
+Jog follow: while a hand turns a jog wheel, `DeckPanel` writes the wheel's position to `jogScrub` (frame.ts, deck →
+track seconds) on every move and clears it on release / spinback / when the song or role changes. The frame loop
+patches started decks' snapshot positions with it, and `TrackStack` uses it for a loaded or cued deck's start (pos
+and the IN mark), so the track view, the deck's time and overview follow the wheel as it turns, not only on release.
+
 Booth display: the booth shows every deck as the auto-DJ runs it — spinning jog wheel (turns with the track
 position, so tempo sync is visible), beat ring, fader and bass meters, track overview with drops and the next
 mix point, bar/phrase counter, and a mood-coloured background that pulses on the beat. It is **display only**
@@ -286,7 +298,7 @@ the note on the Library page. The file wins when it is newer: unsaved local edit
 be replaced by a newer file.
 
 Song markers on the waveform (`components/library/MarkerWaveform.tsx`, top of the track editor's Song markers):
-an overview of the whole song (click / drag to look there, double-click to listen) and a zoomed view (2–32 s,
+an overview of the whole song (click / drag to look there, double-click to listen) and a zoomed view (2–32 s, shown as 1×–16×,
 beats and numbered bars) drawn every frame from the cached waveform (`waveformFor`) — drops, the dialogue and hook
 ranges, the default start, the yellow cursor and the preview playhead (followed while listening, until you scroll).
 Dragging a handle moves a marker (saved on release; hook and default start `snapToBar`, the dialogue exact to 1 ms);
@@ -479,7 +491,7 @@ is shown — decoded at 11 kHz and computed in the analysis worker (`waveformOf`
 deck's rate (`x = (t − pos) / rate`), so beat-matched decks share one beat spacing; a cued deck's position before
 its start is extrapolated from `DeckView.startsAt`, so it scrolls in. Drawn on top: drops (shaded), beats / bars
 (numbered) / 8-bar phrases (mood colour), cue pads, the live deck's mix-out (`snapshot.mixOutPosition`, "MIX") and
-the cued / loaded start ("IN"). Zoom: 4–32 s across. Workers: a second `new Worker(new URL(…))` was handed the
+the cued / loaded start ("IN"). Zoom: 4–32 s across, shown as a zoom level 1×–8× (widest = 1×; the seconds in the tooltip) so + goes up. Workers: a second `new Worker(new URL(…))` was handed the
 analysis worker's entry by the production bundler, so all CPU work shares `analyze.worker.ts` (messages carry
 `kind`).
 
@@ -543,7 +555,10 @@ carries on without a jump), a trackpad two-finger swipe (`wheel` with pixel delt
 positive = forwards; the swipe ends 160 ms after the last event, so momentum scrolling keeps the record turning; a
 pinch, `ctrlKey`, is ignored), while a mouse wheel notch (`deltaMode` ≠ 0 or a whole ±100+ delta) steps one beat.
 Spinback: turning backwards faster than 1080°/s (over the last 120 ms) calls `live.onFling` instead of `onCommit` —
-on release for pointers, at once during a swipe (the rest of that swipe is then ignored). `AutoDJ.spinBack()` plays `Deck.rewind` from the
+on release for pointers, at once during a swipe (the rest of that swipe is then ignored). The wheel's native,
+non-passive `wheel` listener stays on for the wheel's whole life and always `preventDefault`s — also while there's
+nothing to turn: right after a spinback the deck's song goes, and the swipe's momentum would otherwise scroll the
+page (to the top, with a fast swipe). Knobs, faders and tempo sliders do the same through `useWheel`. `AutoDJ.spinBack()` plays `Deck.rewind` from the
 held position (`from` param, the deck is already stopped) and starts the cued song `REWIND_LEAD` later on its
 landing entry (`resolveEntry`: its drop, through its dialogue if marked; its staff tempo). The old deck is freed and
 the next song planned once the spinback has played out. Without a cued song it just plays on (`releaseDeck`).

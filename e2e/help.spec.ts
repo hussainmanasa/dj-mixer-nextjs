@@ -21,6 +21,22 @@ test("the Help page explains the app: reachable from the nav, every contents lin
   await expect(page.getByText(/twist anticlockwise/)).toBeAttached();
   await page.screenshot({ path: "test-results/help.png" });
 
+  // The contents highlight the section being read: the one clicked, then whichever scrolls up to the reading line.
+  const current = page.getByRole("navigation", { name: "Contents" }).locator('[aria-current="location"]');
+  await expect(current).toHaveCount(1);
+  await expect(current).toHaveText("Tempo sliders and Sync");
+  await page.evaluate(() => window.scrollTo(0, document.getElementById("loops")!.offsetTop - 40));
+  await expect(current).toHaveText("Loops");
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await expect(current).toHaveText("Troubleshooting");
+  // A section near the end (it can't reach the reading line) stays highlighted once picked.
+  await contents.filter({ hasText: "Keyboard and mouse" }).click();
+  await expect(current).toHaveText("Keyboard and mouse");
+  await page.waitForTimeout(1200);
+  await expect(current).toHaveText("Keyboard and mouse");
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await expect(current).toHaveText("Quick start");
+
   // And back to the booth from a link in the text.
   await page.locator("#quick-start").getByRole("link", { name: "Booth" }).click();
   await expect(page).toHaveURL(/\/booth$/);

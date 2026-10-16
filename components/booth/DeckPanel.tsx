@@ -8,7 +8,7 @@ import { useLibrary } from "@/store/library";
 import { usePreview } from "@/store/preview";
 import { useSession } from "@/store/session";
 import { MAX_SAVED_LOOPS, type EntryChoice, type Track } from "@/lib/types";
-import { formatTime, setText, useBoothFrame } from "./frame";
+import { formatTime, jogScrub, setText, useBoothFrame } from "./frame";
 import { JogWheel, type JogScrub } from "./JogWheel";
 import { DECK_LETTERS, LABEL, PANEL, SMALL_BUTTON, padStyle } from "./theme";
 import { TrackOverview } from "./TrackOverview";
@@ -137,12 +137,13 @@ export function DeckPanel({
   const art = useArtwork(track);
   const playPreview = usePreview((s) => s.play);
   const getFile = useLibrary((s) => s.getFile);
-  // A different song on this deck, or the deck going on air (Play): its cue is over.
+  // A different song on this deck, or the deck going on air (Play): its cue is over, and so is any jog turn.
   useEffect(() => {
     return () => {
       if (usePreview.getState().playing === cueTag) usePreview.getState().stop();
+      jogScrub.delete(deck);
     };
-  }, [track?.id, role, cueTag]);
+  }, [track?.id, role, cueTag, deck]);
   const a = track?.analysis ?? null;
 
   useBoothFrame((snap) => {
@@ -163,6 +164,7 @@ export function DeckPanel({
     if (nowMixing && usePreview.getState().playing === cueTag) usePreview.getState().stop();
     if (nowMixing && scratch.current) {
       scratch.current = null;
+      jogScrub.delete(deck);
       scratchEnd();
     }
     const rate = view?.rate ?? 1;
@@ -209,13 +211,19 @@ export function DeckPanel({
             position: () => useSession.getState().snapshot()?.decks[deck]?.position ?? 0,
             onGrab: () => grabDeck(deck),
             onFling: (pos) => {
+              jogScrub.delete(deck);
               scratchEnd();
               spinBack(deck, pos);
             },
           },
-          // Turning it scratches on the club speakers — playing or paused, like a record under the hand.
-          onMove: (pos, step) => scratchAt(track, pos, step),
+          // Turning it scratches on the club speakers — playing or paused, like a record under the hand — and the
+          // display follows the wheel as it turns.
+          onMove: (pos, step) => {
+            jogScrub.set(deck, pos);
+            scratchAt(track, pos, step);
+          },
           onCommit: (pos) => {
+            jogScrub.delete(deck);
             scratchEnd();
             releaseDeck(deck, pos);
           },
@@ -232,6 +240,7 @@ export function DeckPanel({
           valueText: (pos) => barLabel(beatBar(a, pos)),
           onMove: (pos, step) => {
             setScrubbing(pos);
+            jogScrub.set(deck, pos);
             // The scratch is heard on the club speakers: a drag follows the wheel, a key / scroll step
             // plays a short blip. A playing preview pauses while scratching.
             if (!scratch.current) {
@@ -244,6 +253,7 @@ export function DeckPanel({
           onCommit: (pos) => {
             const bar = beatBar(a, pos);
             const resumeCue = scratch.current?.resumeCue ?? usePreview.getState().playing === cueTag;
+            jogScrub.delete(deck);
             scratch.current = null;
             scratchEnd();
             setScrubbing(null);
@@ -324,9 +334,16 @@ export function DeckPanel({
             type="button"
             onClick={onEject}
             className="rounded px-1.5 text-sm text-[#9a9aa6] hover:text-foreground disabled:opacity-30"
-            disabled={!onEject}
+            // Like a CDJ: a playing song can't be ejected.
+            disabled={!onEject || (playingDeck && !transport?.thisPaused)}
             aria-label={`Eject Deck ${letter}`}
-            title="Take the song off the deck"
+            title={
+              role === "live"
+                ? "The song on air can't be ejected"
+                : playingDeck && !transport?.thisPaused
+                  ? "Pause this deck first — a playing song can't be ejected"
+                  : "Take the song off the deck (it stays empty until you LOAD one)"
+            }
           >
             ⏏
           </button>

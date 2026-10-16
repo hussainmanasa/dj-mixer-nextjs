@@ -77,7 +77,7 @@ test("song markers on the waveform: click for the cursor, Set here, drag a handl
   await expect(cell("Hook starts")).not.toHaveText("—");
   // Zoom changes the view.
   await dialog.getByRole("group", { name: "Zoom" }).getByRole("button", { name: "Zoom in" }).click();
-  await expect(dialog.getByRole("group", { name: "Zoom" })).toContainText("4 s");
+  await expect(dialog.getByRole("group", { name: "Zoom" })).toContainText("8×");
   await page.screenshot({ path: "test-results/markers.png" });
   expect(errors).toEqual([]);
 });

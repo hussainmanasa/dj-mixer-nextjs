@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { drops } from "@/lib/analysis/structure";
 import type { Waveform } from "@/lib/analysis/waveform";
 import { barSeconds, gridPosition, PHRASE_BARS } from "@/lib/dj/mixpoints";
@@ -11,7 +11,7 @@ import { useLibrary } from "@/store/library";
 import { useSession } from "@/store/session";
 import type { DeckRole } from "./DeckPanel";
 import { PAD_LETTERS } from "./CuePads";
-import { formatTime, setText, useBoothFrame } from "./frame";
+import { formatTime, jogScrub, setText, useBoothFrame } from "./frame";
 import { DECK_LETTERS } from "./theme";
 
 export interface StackRow {
@@ -63,21 +63,31 @@ const ZOOMS = [4, 8, 16, 32];
  * while the auto-DJ mixes you can see the two songs' beats line up. A cued song
  * scrolls in from the right before it starts. Display only.
  */
-export function TrackStack({ rows, color }: { rows: StackRow[]; color: string }) {
+export function TrackStack({ rows, color, notes }: { rows: StackRow[]; color: string; notes?: ReactNode }) {
   const [zoom, setZoom] = useState(1);
   return (
     <section aria-labelledby="track-view-heading" className="rounded-3xl border border-border bg-surface/80 p-4 backdrop-blur">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 id="track-view-heading" className="text-sm font-medium uppercase tracking-wider text-muted">
+      <div className="mb-3 flex items-center justify-between gap-4">
+        <h2 id="track-view-heading" className="shrink-0 text-sm font-medium uppercase tracking-wider text-muted">
           Track view
         </h2>
+        {/* The auto-DJ's notes, in the header's free space (one line, so the view never changes height). */}
+        <div className="min-w-0 flex-1">{notes}</div>
         <div className="flex items-center gap-1.5 text-sm" role="group" aria-label="Zoom">
-          <button type="button" className="btn h-8 w-8 px-0" disabled={zoom === ZOOMS.length - 1} onClick={() => setZoom(zoom + 1)} aria-label="Zoom out">
-            −
+          <button type="button" className="btn grid h-8 w-8 place-items-center p-0" disabled={zoom === ZOOMS.length - 1} onClick={() => setZoom(zoom + 1)} aria-label="Zoom out">
+            {/* Drawn, not typed: the font sits "−" and "+" low in the button. */}
+            <svg viewBox="0 0 12 12" className="h-3 w-3" aria-hidden>
+              <path d="M2 6h8" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+            </svg>
           </button>
-          <span className="w-12 text-center font-mono text-xs text-muted">{ZOOMS[zoom]} s</span>
-          <button type="button" className="btn h-8 w-8 px-0" disabled={zoom === 0} onClick={() => setZoom(zoom - 1)} aria-label="Zoom in">
-            +
+          {/* The zoom level (so + goes up): the widest view is 1×; the tooltip says how many seconds fit across. */}
+          <span className="w-12 text-center font-mono text-xs text-muted" title={`${ZOOMS[zoom]} s across`}>
+            {ZOOMS[ZOOMS.length - 1] / ZOOMS[zoom]}×
+          </span>
+          <button type="button" className="btn grid h-8 w-8 place-items-center p-0" disabled={zoom === 0} onClick={() => setZoom(zoom - 1)} aria-label="Zoom in">
+            <svg viewBox="0 0 12 12" className="h-3 w-3" aria-hidden>
+              <path d="M2 6h8M6 2v8" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+            </svg>
           </button>
         </div>
       </div>
@@ -150,8 +160,18 @@ function Row({ row, color, span }: { row: StackRow; color: string; span: number 
     }
     const view = snap?.decks[deck] ?? null;
     const rate = view?.rate ?? 1;
+    // A loaded or cued song whose start point a hand is turning: it sits there (and its IN mark with it).
+    const scrub = view?.started ? undefined : jogScrub.get(deck);
+    const startHere = scrub ?? startAt;
     // Where the song is (a cued song before its start: where it would be, so it scrolls in).
-    const pos = view ? (view.started ? view.position : view.position - Math.max(0, view.startsAt - snap!.now) * rate) : (startAt ?? 0);
+    const pos =
+      scrub !== undefined
+        ? scrub
+        : view
+          ? view.started
+            ? view.position
+            : view.position - Math.max(0, view.startsAt - snap!.now) * rate
+          : (startAt ?? 0);
     const mixing = !!snap?.mix && snap.now >= snap.mix.start;
     // Two songs layered or playing together: the one on air stays on air until they swap.
     const together = useSession.getState().status.next?.together;
@@ -204,8 +224,8 @@ function Row({ row, color, span }: { row: StackRow; color: string; span: number 
       mark:
         role === "live" && snap?.mixOutPosition != null
           ? { at: snap.mixOutPosition, label: "MIX" }
-          : (role === "incoming" || role === "loaded") && startAt !== undefined
-            ? { at: startAt, label: "IN" }
+          : (role === "incoming" || role === "loaded") && startHere !== undefined
+            ? { at: startHere, label: "IN" }
             : null,
     });
   });

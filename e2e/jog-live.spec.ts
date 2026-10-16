@@ -101,3 +101,35 @@ test("with both decks playing together, the jog wheel works on both", async ({ p
   await expect.poll(() => states(page), { timeout: 3000 }).toMatch(/A:On air.*B:Playing along/);
   expect((await deckStates(page)).find((d) => d.startsWith("B:"))).not.toBe(before);
 });
+
+test("the track view follows the jog wheel while it turns, not only when it's let go", async ({ page }) => {
+  await loadLibrary(page);
+  /** The track view row's "m:ss / −m:ss" for a deck, in seconds. */
+  const rowTime = async (letter: string) => {
+    const t = (await page.getByRole("group", { name: `Track view, Deck ${letter}` }).textContent()) ?? "";
+    const m = t.match(/(\d+):(\d\d) \/ −/);
+    return m ? Number(m[1]) * 60 + Number(m[2]) : NaN;
+  };
+
+  // Before Play: a loaded deck's start point, turned forwards 3 times (≈ 5.4 s), shows in the track view mid-turn.
+  await page.click("nav >> text=Booth");
+  await page.getByRole("button", { name: "Load track, Deck A" }).click();
+  await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove A" }).getByRole("button").last().click();
+  await expect.poll(() => rowTime("A")).not.toBeNaN();
+  const before = await rowTime("A");
+  await spin(page, page.getByRole("slider", { name: "Start point, Deck A" }), 3, false);
+  await expect.poll(() => rowTime("A"), { timeout: 2000 }).toBeGreaterThanOrEqual(before + 4);
+  await page.mouse.up();
+  await page.getByRole("button", { name: "Eject Deck A" }).click();
+
+  // During the set: hold the song on air and turn it back twice (≈ 3.6 s) — the track view goes back while held.
+  await startBooth(page, "Groove");
+  await expect.poll(() => states(page), { timeout: 30_000 }).toMatch(/A:On air/);
+  await expect.poll(() => rowTime("A"), { timeout: 20_000 }).toBeGreaterThanOrEqual(8);
+  const held = await rowTime("A");
+  await spin(page, page.getByRole("slider", { name: "Song position, Deck A" }), -2, false);
+  expect(await states(page)).toMatch(/A:Scratch/);
+  await expect.poll(() => rowTime("A"), { timeout: 2000 }).toBeLessThanOrEqual(held - 2);
+  await page.mouse.up();
+  await expect.poll(() => states(page), { timeout: 3000 }).toMatch(/A:On air/);
+});

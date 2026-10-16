@@ -372,6 +372,11 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   ejectDeck(deck) {
+    // During the set: take the (stopped) song off that deck; it stays empty until LOAD.
+    if (dj?.isPlaying) {
+      dj.eject(deck);
+      return;
+    }
     const preloads = [...get().preloads];
     preloads[deck] = null;
     set({ preloads });

@@ -171,13 +171,15 @@ export function JogWheel({
   };
 
   // Scroll over the wheel: a mouse wheel steps one beat a notch; a trackpad's two-finger swipe turns it
-  // (and a fast swipe back on the song on air spins it back). Native listener so the page doesn't scroll too.
+  // (and a fast swipe back on the song on air spins it back). Native listener so the page doesn't scroll too —
+  // always on, even while the wheel has nothing to turn: right after a spinback the deck's song goes, and the rest of
+  // the swipe's momentum would otherwise scroll the page (up to the top, with a fast swipe).
   useEffect(() => {
     const el = root.current;
-    if (!el || !scrub) return;
+    if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      if (e.ctrlKey) return; // a pinch
+      if (e.ctrlKey || !latest.current) return; // a pinch, or nothing to turn
       const px = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
       if (!px) return;
       const notch = e.deltaMode !== 0 || (e.deltaX === 0 && Math.abs(e.deltaY) >= 100 && Number.isInteger(e.deltaY));
@@ -199,9 +201,9 @@ export function JogWheel({
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-    // stepBeats reads the latest props through refs.
+    // stepBeats, grab, turn and fling read the latest props through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [!!scrub]);
+  }, []);
 
   /** Angle (°) of a point round the wheel's centre. */
   const centreAngle = (x: number, y: number) => {

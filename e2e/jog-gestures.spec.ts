@@ -65,10 +65,23 @@ test("trackpad: a two-finger swipe scratches the song on air, a fast swipe back 
   expect(await playedA(page)).toBeLessThanOrEqual(before - 1);
   expect(await states(page)).toMatch(/B:Cued/);
 
-  // A fast swipe back: spinback, and the cued song drops in.
+  // A fast swipe back (real trackpad events): spinback, and the cued song drops in. The page never scrolls — not
+  // during the swipe, nor from its momentum once Deck A's song has gone.
   const cued = (await deckStates(page)).find((d) => d.startsWith("B:"))!.split(" ").at(-1);
-  await swipe(jog, -60, 15, 8);
+  await jog.scrollIntoViewIfNeeded();
+  await page.evaluate(() => window.scrollBy(0, 120));
+  const box = (await jog.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const y0 = await page.evaluate(() => window.scrollY);
+  expect(y0).toBeGreaterThan(0);
+  for (let i = 0; i < 15; i++) await page.mouse.wheel(0, -60);
   await expect.poll(() => states(page), { timeout: 5000 }).toMatch(new RegExp(`B:On air .*${cued}`));
+  for (let i = 0; i < 30; i++) {
+    await page.mouse.wheel(0, -Math.max(2, 40 - i));
+    await page.waitForTimeout(16);
+  }
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => window.scrollY)).toBe(y0);
   expect(errors).toEqual([]);
 });
 
