@@ -347,11 +347,24 @@ export function Guide() {
             press the lit one (or <B>Exit loop</B>) to let the song carry on from there.
           </p>
           <ul className="list-disc space-y-1.5 pl-5">
-            <li>The auto-DJ&apos;s next mix waits while it loops (Up next says &quot;After the loop&quot;) and is planned again when it ends.</li>
+            <li>
+              <B>On the cued deck</B> too: before it plays, a loop is <B>armed</B> (dashed) from where the song will start — press{" "}
+              <B>▶ Play now</B> and it comes in looping its intro while the song on air plays on, for as long as you like. Press{" "}
+              <B>Drop</B> to let the loop go and mix. While it plays along you can also start or change a loop on it.
+            </li>
+            <li>
+              <B>Saved loops</B> (L1–L4) appear as buttons under the loop lengths when the song has them. On the song on air, a saved loop
+              loops there (if the song is already past it, it jumps there on the beat); on the cued song it is armed, and the song starts from it.
+            </li>
+            <li>The auto-DJ&apos;s next mix waits while the song on air loops (Up next says &quot;After the loop&quot;) and is planned again when it ends.</li>
             <li>
               Pressing <B>Drop</B>, <B>▶ Play now</B> or a cue pad ends the loop — loop a few beats, then Drop is a classic build-up.
             </li>
-            <li>The track view shades the loop. Loops wait while the song is mixing, paused or still in its dialogue.</li>
+            <li>
+              The track view shades a loop that&apos;s playing (dashed edges: armed) and outlines the song&apos;s saved loops. Loops wait while the
+              song is mixing, paused or still in its dialogue. If the song on air nears its end while the cued song loops, they swap by
+              themselves so the music never gets stuck.
+            </li>
           </ul>
         </Section>
 
@@ -420,6 +433,16 @@ export function Guide() {
               (songs whose analysis looks doubtful), and press <B>Edit</B> to fix one.
             </li>
             <li>Decks, Key lock and Audio outputs are described under Before the night.</li>
+            <li>
+              <B>Settings file in the music folder:</B> the app can keep its settings (decks, key lock, mood edits, volumes) and every
+              song&apos;s edits (★ / ⛔, crates, markers, cue pads, saved loops, beat-grid / key / drop fixes) in{" "}
+              <span className="font-mono">ai-dj-mixer-settings.json</span> inside your music folder. Press{" "}
+              <B>Save settings in the music folder</B> once (Chrome asks to let the app edit files there); after that it&apos;s kept up to date
+              automatically. Whenever the folder is opened or rescanned — on this computer or any other — the app reads the file (or any
+              of its .json files that is one of ours) and takes it over if it&apos;s newer. Copy the folder to another computer and open it: the
+              songs come with their edits. Audio devices aren&apos;t saved (they differ per computer), and songs are matched by their
+              content, so renaming or moving them keeps their edits.
+            </li>
           </ul>
         </Section>
 
@@ -430,7 +453,11 @@ export function Guide() {
               ["Crates", "Your own groups, e.g. “Romantic” or “Punjabi”. Moods can be limited to crates."],
               [
                 "Song markers",
-                "Dialogue start/end, hook start/end and a default start, on the song's waveform. The top strip is the whole song (click to look there, double-click to listen); the big view below shows a few seconds with every beat. Drag a marker's handle to move it; drag the waveform (or swipe on a trackpad) to scroll; click to put the yellow cursor there and listen, then press Set here → Dialogue start / end, Hook start / end or Default start. − / + zooms (2–32 s). Hook and default start snap to the bar; the dialogue is exact. Mark now and the nudge buttons still work, and the analysis suggests a hook and a dialogue — Listen, then Use if it's right.",
+                "Cue in, cue out, dialogue start/end and hook start/end, on the song's waveform. Cue in is where the song starts when the auto-DJ brings it in (Start from: Auto); cue out is where it hands over to the next song — the mix is timed so the hand-over lands there — instead of the auto-DJ's own guess (useful for long fade-outs or an outro you never want played). The top strip is the whole song (click to look there, double-click to listen); the big view below shows a few seconds with every beat. Drag a marker's handle to move it; drag the waveform (or swipe on a trackpad) to scroll; click to put the yellow cursor there and listen, then press Set here → Dialogue start / end, Hook start / end, Cue in or Cue out. − / + zooms (2–32 s). Cue in, cue out and the hook snap to the bar; the dialogue is exact. Mark now and the nudge buttons still work, and the analysis suggests a hook and a dialogue — Listen, then Use if it's right.",
+              ],
+              [
+                "Saved loops",
+                "Up to 4 per song (L1–L4, amber on the waveform). Put the cursor where it should start and press Save loop at cursor: 1, 2, 4, 8 or 16 bars (it starts on a bar). Drag either edge to adjust it (it stays on the beat), ▶ to listen, ✕ to delete. They show as buttons on the deck whenever the song is loaded, cued or on air.",
               ],
               [
                 "Drops",

@@ -529,7 +529,7 @@ function NextMix({ status, color }: { status: AutoDJStatus; color: string }) {
             <span>
               {status.paused !== null
                 ? "When you press ▶"
-                : status.loop
+                : status.loops.some((l) => l.deck === status.now?.deck && !l.armed) && status.next.transition !== "layer"
                   ? "After the loop"
                   : status.next.together
                     ? "Playing together"

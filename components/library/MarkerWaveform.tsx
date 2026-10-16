@@ -6,7 +6,7 @@ import type { Waveform } from "@/lib/analysis/waveform";
 import { snapToBar } from "@/lib/dj/cues";
 import { barSeconds } from "@/lib/dj/mixpoints";
 import { waveformFor } from "@/lib/library/waveform";
-import type { Track, TrackCues } from "@/lib/types";
+import { MAX_SAVED_LOOPS, type Track, type TrackCues } from "@/lib/types";
 import { useLibrary } from "@/store/library";
 
 type MarkerKey = keyof TrackCues;
@@ -16,12 +16,17 @@ const MARKERS: { key: MarkerKey; label: string; tag: string; color: string; snap
   { key: "dialogueEnd", label: "Dialogue end", tag: "◂D", color: "#22d3ee", snap: false },
   { key: "hookStart", label: "Hook start", tag: "H▸", color: "#a78bfa", snap: true },
   { key: "hookEnd", label: "Hook end", tag: "◂H", color: "#a78bfa", snap: true },
-  { key: "start", label: "Default start", tag: "⚑", color: "#f2f2f7", snap: true },
+  { key: "start", label: "Cue in", tag: "IN", color: "#f2f2f7", snap: true },
+  { key: "end", label: "Cue out", tag: "OUT", color: "#f87171", snap: true },
 ];
 /** Seconds across the zoomed view. */
 const ZOOMS = [2, 4, 8, 16, 32];
 /** Grab a marker within this many CSS pixels of it. */
 const HIT_PX = 10;
+/** Saved-loop lengths offered at the cursor, in bars. */
+const LOOP_BARS = [1, 2, 4, 8, 16];
+type SavedLoop = { start: number; end: number };
+type Drag = { kind: "marker"; key: MarkerKey; value: number } | { kind: "loop"; index: number; edge: "start" | "end"; value: number };
 
 /** m:ss.ss */
 function clock(sec: number): string {
@@ -35,17 +40,22 @@ function clock(sec: number): string {
  * seconds with every beat. Drag a marker's handle to move it, drag the waveform
  * (or swipe on a trackpad) to scroll, click to put the cursor there and listen,
  * then "Set … here" places a marker exactly at the cursor. Hook and default start
- * snap to the bar; the dialogue is exact.
+ * snap to the bar; the dialogue is exact. Cue in / cue out: where the song
+ * starts (Start from: Auto) and where the auto-DJ hands over to the next song. Saved loops (L1–L4, amber) are made
+ * at the cursor ("Save loop") and their edges dragged on the beat grid.
  */
 export function MarkerWaveform({
   track,
   onSet,
+  onLoops,
   onListen,
   playhead,
   canListen,
 }: {
   track: Track;
   onSet: (key: MarkerKey, seconds: number | null) => void;
+  /** Save the song's loops. */
+  onLoops: (loops: SavedLoop[]) => void;
   /** Play the song from a position on the preview output. */
   onListen: (from: number) => void;
   /** The preview playhead (track seconds), or null when not playing. */
@@ -70,15 +80,26 @@ export function MarkerWaveform({
   // View state lives in refs so dragging and the playhead redraw without re-rendering.
   const focus = useRef(Math.min(a.duration / 2, a.firstBeat + 8 * barSeconds(a)));
   const follow = useRef(false);
-  const dragging = useRef<{ key: MarkerKey; value: number } | null>(null);
+  const dragging = useRef<Drag | null>(null);
   const pan = useRef<{ x: number; focus: number; moved: boolean } | null>(null);
-  const latest = useRef({ cues: track.cues ?? {}, zoom, cursor, wave });
+  const latest = useRef({ cues: track.cues ?? {}, loops: track.savedLoops ?? [], zoom, cursor, wave });
   const drawRef = useRef<() => void>(() => undefined);
 
   const sections = useRef(a.barLevels ? drops(a.barLevels, a.fullLevel) : []);
   const span = () => ZOOMS[latest.current.zoom];
   const viewStart = () => Math.max(0, Math.min(Math.max(0, a.duration - span()), focus.current - span() / 2));
-  const markerValue = (key: MarkerKey) => (dragging.current?.key === key ? dragging.current.value : latest.current.cues[key]);
+  const markerValue = (key: MarkerKey) => {
+    const d = dragging.current;
+    return d?.kind === "marker" && d.key === key ? d.value : latest.current.cues[key];
+  };
+  /** Saved loops, with the one being dragged where the hand has it. */
+  const loopsNow = (): SavedLoop[] =>
+    latest.current.loops.map((l, i) => {
+      const d = dragging.current;
+      if (d?.kind !== "loop" || d.index !== i) return l;
+      return d.edge === "start" ? { start: Math.min(d.value, l.end - 60 / a.bpm), end: l.end } : { start: l.start, end: Math.max(d.value, l.start + 60 / a.bpm) };
+    });
+  const onBeat = (t: number) => Math.max(0, Math.min(a.duration, a.firstBeat + Math.round((t - a.firstBeat) / (60 / a.bpm)) * (60 / a.bpm)));
   const place = (key: MarkerKey, t: number) => {
     const m = MARKERS.find((x) => x.key === key)!;
     const v = Math.max(0, Math.min(a.duration, t));
@@ -121,6 +142,7 @@ export function MarkerWaveform({
     const ranges: { from?: number; to?: number; color: string }[] = [
       { from: markerValue("dialogueStart"), to: markerValue("dialogueEnd"), color: "#22d3ee" },
       { from: markerValue("hookStart"), to: markerValue("hookEnd"), color: "#a78bfa" },
+      ...loopsNow().map((l) => ({ from: l.start, to: l.end, color: "#fbbf24" })),
     ];
     const paint = (g: CanvasRenderingContext2D, t0: number, t1: number, detailed: boolean) => {
       const W = g.canvas.width;
@@ -192,13 +214,32 @@ export function MarkerWaveform({
         g.fillStyle = m.color;
         g.fillRect(x - dpr, 0, 2 * dpr, H);
         if (detailed) {
-          g.fillRect(x - 6 * dpr, H - 14 * dpr, 12 * dpr, 14 * dpr);
+          const w = g.measureText(m.tag).width + 6 * dpr;
+          g.fillRect(x - w / 2, H - 14 * dpr, w, 14 * dpr);
           g.fillStyle = "#07070b";
           g.textBaseline = "bottom";
-          g.fillText(m.tag, x - 5 * dpr, H - 2 * dpr);
+          g.fillText(m.tag, x - w / 2 + 3 * dpr, H - 2 * dpr);
           g.textBaseline = "top";
         }
       }
+      // Saved loops: edges and tags.
+      loopsNow().forEach((l, i) => {
+        for (const [t, edge] of [
+          [l.start, "start"],
+          [l.end, "end"],
+        ] as const) {
+          const x = xOf(t);
+          if (x < -20 || x > W + 20) continue;
+          g.fillStyle = "#fbbf24";
+          g.fillRect(x - dpr, 0, 2 * dpr, H);
+          if (detailed) {
+            g.fillRect(x - 8 * dpr, 0, 16 * dpr, 13 * dpr);
+            g.fillStyle = "#07070b";
+            g.textBaseline = "top";
+            g.fillText(edge === "start" ? `L${i + 1}` : `◂${i + 1}`, x - 7 * dpr, 2 * dpr);
+          }
+        }
+      });
       // Cursor and playhead.
       const c = latest.current.cursor;
       if (c !== null) {
@@ -219,11 +260,13 @@ export function MarkerWaveform({
       o.strokeRect((viewStart() / a.duration) * W, 0.5 * dpr, (span() / a.duration) * W, o.canvas.height - dpr);
     }
     if (d) paint(d, viewStart(), viewStart() + span(), true);
+    // The view's time range (start, span), for tests and tools.
+    if (detail.current) detail.current.dataset.view = `${viewStart().toFixed(3)},${span()}`;
   };
 
   // The latest props for the event handlers and the animation loop (kept current after every render).
   useEffect(() => {
-    latest.current = { cues: track.cues ?? {}, zoom, cursor, wave };
+    latest.current = { cues: track.cues ?? {}, loops: track.savedLoops ?? [], zoom, cursor, wave };
     drawRef.current = draw;
   });
 
@@ -246,19 +289,29 @@ export function MarkerWaveform({
     const c = e.currentTarget;
     c.setPointerCapture(e.pointerId);
     const box = c.getBoundingClientRect();
-    const hit = MARKERS.map((m) => ({ m, v: latest.current.cues[m.key] }))
-      .filter((h): h is { m: (typeof MARKERS)[number]; v: number } => h.v !== undefined)
-      .map((h) => ({ ...h, dx: Math.abs(((h.v - viewStart()) / span()) * box.width - (e.clientX - box.left)) }))
-      .filter((h) => h.dx <= HIT_PX)
-      .sort((x, y) => x.dx - y.dx)[0];
+    const dxOf = (v: number) => Math.abs(((v - viewStart()) / span()) * box.width - (e.clientX - box.left));
+    const candidates: { drag: Drag; dx: number }[] = [
+      ...MARKERS.filter((m) => latest.current.cues[m.key] !== undefined).map((m) => {
+        const v = latest.current.cues[m.key]!;
+        return { drag: { kind: "marker", key: m.key, value: v } as Drag, dx: dxOf(v) };
+      }),
+      ...latest.current.loops.flatMap((l, index) => [
+        { drag: { kind: "loop", index, edge: "start", value: l.start } as Drag, dx: dxOf(l.start) },
+        { drag: { kind: "loop", index, edge: "end", value: l.end } as Drag, dx: dxOf(l.end) },
+      ]),
+    ];
+    const hit = candidates.filter((c) => c.dx <= HIT_PX).sort((x, y) => x.dx - y.dx)[0];
     follow.current = false;
-    if (hit) dragging.current = { key: hit.m.key, value: hit.v };
+    if (hit) dragging.current = hit.drag;
     else pan.current = { x: e.clientX, focus: focus.current, moved: false };
   };
   const onDetailMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const c = e.currentTarget;
-    if (dragging.current) {
-      dragging.current.value = place(dragging.current.key, timeAt(c, e.clientX, false));
+    const d = dragging.current;
+    if (d) {
+      const t = timeAt(c, e.clientX, false);
+      // Loop edges sit on the beat grid.
+      d.value = d.kind === "marker" ? place(d.key, t) : onBeat(t);
     } else if (pan.current) {
       const dx = e.clientX - pan.current.x;
       if (Math.abs(dx) > 3) pan.current.moved = true;
@@ -268,9 +321,12 @@ export function MarkerWaveform({
   const onDetailUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const d = dragging.current;
     const p = pan.current;
+    // (The dragged loops are read before the drag is cleared.)
+    const draggedLoops = d?.kind === "loop" ? loopsNow() : null;
     dragging.current = null;
     pan.current = null;
-    if (d) onSet(d.key, d.value);
+    if (d?.kind === "marker") onSet(d.key, d.value);
+    else if (draggedLoops) onLoops(draggedLoops);
     else if (p && !p.moved) {
       const t = Math.round(timeAt(e.currentTarget, e.clientX, false) * 1000) / 1000;
       setCursor(t);
@@ -344,6 +400,51 @@ export function MarkerWaveform({
           >
             {m.label}
           </button>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-2 text-sm" role="group" aria-label="Saved loops">
+        <span className="text-muted">Save loop at cursor:</span>
+        {LOOP_BARS.map((bars) => (
+          <button
+            key={bars}
+            type="button"
+            className="btn px-2.5 py-1 text-xs"
+            style={{ borderColor: "#fbbf24" }}
+            disabled={cursor === null || (track.savedLoops?.length ?? 0) >= MAX_SAVED_LOOPS}
+            onClick={() => {
+              if (cursor === null) return;
+              const start = snapToBar(a, cursor);
+              onLoops([...(track.savedLoops ?? []), { start, end: Math.min(a.duration, start + bars * barSeconds(a)) }]);
+            }}
+          >
+            {bars} bar{bars === 1 ? "" : "s"}
+          </button>
+        ))}
+        {(track.savedLoops ?? []).map((l, i) => (
+          <span key={i} className="flex items-center gap-1 rounded-lg border border-[#fbbf24]/60 px-2 py-0.5 font-mono text-xs">
+            L{i + 1} {clock(l.start)}–{clock(l.end)}
+            <button
+              type="button"
+              className="px-1 text-muted hover:text-foreground disabled:opacity-40"
+              disabled={!canListen}
+              onClick={() => {
+                follow.current = true;
+                focus.current = l.start;
+                onListen(l.start);
+              }}
+              aria-label={`Listen to loop ${i + 1}`}
+            >
+              ▶
+            </button>
+            <button
+              type="button"
+              className="px-1 text-muted hover:text-bad"
+              onClick={() => onLoops((track.savedLoops ?? []).filter((_, j) => j !== i))}
+              aria-label={`Delete loop ${i + 1}`}
+            >
+              ✕
+            </button>
+          </span>
         ))}
       </div>
       {!wave && <p className="text-xs text-muted">Preparing the waveform… (showing one block per bar meanwhile)</p>}

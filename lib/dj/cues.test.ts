@@ -158,3 +158,11 @@ describe("jog wheel start points", () => {
     expect(resolveEntry(track("t"), { kind: "bar", bar: 10.25 }).land).toBeCloseTo(21, 6);
   });
 });
+
+describe("cue out", () => {
+  it("must come after the cue in and sit inside the song", () => {
+    expect(validateCues({ start: 10, end: 8 }, 200)).toContain("The cue out must come after the cue in.");
+    expect(validateCues({ start: 10, end: 300 }, 200)).toContain("Markers must be inside the song.");
+    expect(validateCues({ start: 10, end: 180 }, 200)).toEqual([]);
+  });
+});

@@ -57,8 +57,10 @@ interface SessionState {
   spinBack: (deck: number, position: number) => void;
   /** A deck's tempo slider (playback rate). */
   setDeckTempo: (deck: number, rate: number) => void;
-  /** Beat loop on the song on air (`beats` long); pressing the same length again lets it go. */
+  /** Beat loop on the song on air, the song playing along, or armed on the cued song; the same length again lets it go. */
   loop: (deck: number, beats: number) => void;
+  /** A saved loop on a deck (pressed again: let it go). */
+  savedLoop: (deck: number, start: number, end: number) => void;
   exitLoop: (deck: number) => void;
   /** AI DJ mode on / off (off: staff mix with Drop / ▶ Play now; it takes over near the end of a song). */
   setAuto: (on: boolean) => void;
@@ -139,7 +141,7 @@ const idle = (mood: MoodId, deckCount: number): AutoDJStatus => ({
   deckCount,
   paused: null,
   holding: false,
-  loop: null,
+  loops: [],
   auto: true,
 });
 
@@ -268,9 +270,16 @@ export const useSession = create<SessionState>((set, get) => ({
 
   loop(deck, beats) {
     if (!dj || get().stopping) return;
-    const l = get().status.loop;
-    if (l?.deck === deck && l.beats === beats) dj.exitLoop(deck);
+    const l = get().status.loops.find((x) => x.deck === deck);
+    if (l && l.beats === beats) dj.exitLoop(deck);
     else dj.loop(deck, beats);
+  },
+
+  savedLoop(deck, start, end) {
+    if (!dj || get().stopping) return;
+    const l = get().status.loops.find((x) => x.deck === deck);
+    if (l && l.beats === null && Math.abs(l.start - start) < 0.01 && Math.abs(l.end - end) < 0.01) dj.exitLoop(deck);
+    else dj.savedLoop(deck, start, end);
   },
 
   exitLoop(deck) {

@@ -188,7 +188,8 @@ const MARKERS: { key: keyof TrackCues; label: string; snap: boolean }[] = [
   { key: "dialogueEnd", label: "Dialogue ends", snap: false },
   { key: "hookStart", label: "Hook starts", snap: true },
   { key: "hookEnd", label: "Hook ends", snap: true },
-  { key: "start", label: "Default start", snap: true },
+  { key: "start", label: "Cue in", snap: true },
+  { key: "end", label: "Cue out", snap: true },
 ];
 
 /** m:ss.s */
@@ -199,6 +200,7 @@ function clock(sec: number): string {
 
 function CueSection({ track }: { track: Track }) {
   const setCues = useLibrary((s) => s.setCues);
+  const setSavedLoops = useLibrary((s) => s.setSavedLoops);
   const getFile = useLibrary((s) => s.getFile);
   const boothPlaying = usePreviewBlocked();
   const preview = usePreview();
@@ -246,11 +248,12 @@ function CueSection({ track }: { track: Track }) {
   return (
     <Section
       title="Song markers"
-      hint="Drag a marker's handle on the waveform, or click to put the cursor there (and listen) and press Set here — or play the song and press Mark now. The dialogue plays before the song drops in (Drop and Desi Night); the hook is what Desi Night opens with. Hook and default start snap to the bar."
+      hint="Drag a marker's handle on the waveform, or click to put the cursor there (and listen) and press Set here — or play the song and press Mark now. Cue in is where the song starts when the auto-DJ brings it in; cue out is where it hands over to the next song (instead of its own guess). The dialogue plays before the song drops in (Drop and Desi Night); the hook is what Desi Night opens with. Cue in, cue out and the hook snap to the bar."
     >
       <MarkerWaveform
         track={track}
         onSet={(key, seconds) => void setCues(track.id, { [key]: seconds })}
+        onLoops={(loops) => void setSavedLoops(track.id, loops)}
         onListen={(from) => void playFrom(from)}
         playhead={() => {
           // Only this editor's previews (not a booth Cue or a picker preview playing another song).

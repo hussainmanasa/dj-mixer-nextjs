@@ -95,6 +95,9 @@ export function DeckPanel({
   const lockedRef = useRef(false);
   // This deck's mix is sounding (⏸ then stops one side of it), and the live song is in its dialogue.
   const [mixing, setMixing] = useState(false);
+  // Two songs layered / playing together (before their swap): loops still allowed.
+  const [layered, setLayered] = useState(false);
+  const layeredRef = useRef(false);
   const mixingRef = useRef(false);
   const [inDialogue, setInDialogue] = useState(false);
   const inDialogueRef = useRef(false);
@@ -149,6 +152,11 @@ export function DeckPanel({
     if (transport?.thisPaused) label = holding ? "Scratch" : "Paused";
     setText(badge.current, label);
     const nowMixing = (role === "incoming" || role === "live") && !!snap?.mix && snap.now >= snap.mix.start;
+    const nowLayered = !!snap?.layering;
+    if (nowLayered !== layeredRef.current) {
+      layeredRef.current = nowLayered;
+      setLayered(nowLayered);
+    }
     if (nowMixing !== mixingRef.current) {
       mixingRef.current = nowMixing;
       setMixing(nowMixing);
@@ -481,8 +489,20 @@ export function DeckPanel({
         )}
       </div>
 
-      {role === "live" && transport && a && (
-        <LoopButtons deck={deck} disabled={mixing || transport.thisPaused || inDialogue} />
+      {(role === "live" || role === "incoming") && transport && liveTrack && a && (
+        <LoopButtons
+          deck={deck}
+          track={liveTrack}
+          cued={role === "incoming" && !mixing}
+          // On air: not during a mix (playing together is fine), paused or in a dialogue. Cued: not once a mix starts.
+          disabled={
+            role === "live"
+              ? (mixing && !layered) || transport.thisPaused || inDialogue
+              : mixing
+                ? !layered
+                : locked
+          }
+        />
       )}
 
       {liveTrack && a && (role === "live" || role === "incoming" || role === "loaded") && (
@@ -572,22 +592,34 @@ const LOOP_BEATS = [0.25, 0.5, 1, 2, 4, 8, 16];
 const LOOP_LABEL: Record<number, string> = { 0.25: "¼", 0.5: "½" };
 
 /**
- * Beat loops on the song on air: ¼ to 16 beats, starting on the beat it's in.
- * The lit length is the loop playing; press it again (or Exit) to let the song
- * carry on. The auto-DJ's next mix waits until the loop ends.
+ * Loops on a deck: ¼ to 16 beats, and the song's saved loops. On the song on
+ * air (or the song playing along) a loop starts on the beat it's in; on the cued
+ * song it is armed — it loops from its start once ▶ Play now brings it in, until
+ * Drop. The lit button is the loop playing (dashed: armed); press it again, or
+ * Exit, to let the song carry on.
  */
-function LoopButtons({ deck, disabled }: { deck: number; disabled: boolean }) {
-  const loop = useSession((s) => (s.status.loop?.deck === deck ? s.status.loop : null));
+function LoopButtons({ deck, track, cued, disabled }: { deck: number; track: Track; cued: boolean; disabled: boolean }) {
+  const loop = useSession((s) => s.status.loops.find((l) => l.deck === deck) ?? null);
   const setLoop = useSession((s) => s.loop);
+  const savedLoop = useSession((s) => s.savedLoop);
   const exitLoop = useSession((s) => s.exitLoop);
   const letter = DECK_LETTERS[deck];
+  const a = track.analysis;
+  const style = (on: boolean) =>
+    on
+      ? loop?.armed
+        ? { borderColor: "#fbbf24", borderStyle: "dashed", color: "#fbbf24", background: "color-mix(in srgb, #fbbf24 12%, var(--surface))" }
+        : { borderColor: "#fbbf24", background: "#fbbf24", color: "#07070b" }
+      : { borderColor: "var(--border)", background: "var(--surface-2)" };
   return (
     <div className="mt-3" role="group" aria-label={`Loop, Deck ${letter}`}>
       <div className="mb-1.5 flex items-center justify-between">
-        <span className="text-xs uppercase tracking-wider text-muted">Loop · beats</span>
+        <span className="text-xs uppercase tracking-wider text-muted">
+          Loop · beats{cued && <span className="ml-1 normal-case tracking-normal">(starts with ▶ Play now)</span>}
+        </span>
         {loop && (
           <button type="button" className="rounded border border-warn px-2 py-0.5 text-[11px] font-semibold text-warn" onClick={() => exitLoop(deck)}>
-            Exit loop
+            {loop.armed ? "Don't loop" : "Exit loop"}
           </button>
         )}
       </div>
@@ -601,16 +633,39 @@ function LoopButtons({ deck, disabled }: { deck: number; disabled: boolean }) {
               disabled={disabled && !on}
               aria-pressed={on}
               aria-label={`Loop ${b} beat${b === 1 ? "" : "s"}, Deck ${letter}`}
-              title={on ? "Let the loop go" : `Loop ${b} beat${b === 1 ? "" : "s"} from this beat`}
+              title={on ? "Let the loop go" : cued ? `Loop ${b} beat${b === 1 ? "" : "s"} from where it starts` : `Loop ${b} beat${b === 1 ? "" : "s"} from this beat`}
               onClick={() => setLoop(deck, b)}
               className="h-10 rounded-lg border font-mono text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-40"
-              style={on ? { borderColor: "#fbbf24", background: "#fbbf24", color: "#07070b" } : { borderColor: "var(--border)", background: "var(--surface-2)" }}
+              style={style(on)}
             >
               {LOOP_LABEL[b] ?? b}
             </button>
           );
         })}
       </div>
+      {a && !!track.savedLoops?.length && (
+        <div className="mt-1.5 flex flex-wrap gap-1.5" aria-label={`Saved loops, Deck ${letter}`} role="group">
+          {track.savedLoops.map((l, i) => {
+            const on = !!loop && loop.beats === null && Math.abs(loop.start - l.start) < 0.01 && Math.abs(loop.end - l.end) < 0.01;
+            const bars = (l.end - l.start) / barSeconds(a);
+            return (
+              <button
+                key={i}
+                type="button"
+                disabled={disabled && !on}
+                aria-pressed={on}
+                aria-label={`Saved loop ${i + 1}, ${barLabel(beatBar(a, l.start))}, Deck ${letter}`}
+                title={on ? "Let the loop go" : `Loop ${barLabel(beatBar(a, l.start))}, ${Math.round(bars * 4) / 4} bars`}
+                onClick={() => savedLoop(deck, l.start, l.end)}
+                className="h-9 rounded-lg border px-2.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-40"
+                style={style(on)}
+              >
+                L{i + 1} · {barLabel(beatBar(a, l.start)).replace("Bar ", "")} · {Math.round(bars * 4) / 4} bar{bars === 1 ? "" : "s"}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

@@ -29,7 +29,7 @@ import { MAX_DECKS, MIN_DECKS, type EntryChoice, type Mood, type MoodId, type Tr
 import { defaultStart, firstStart, layerEntry, openerWindow, resolveEntry, type FirstStart } from "./cues";
 import { getMood, targetEnergy } from "./moods";
 import { drops } from "@/lib/analysis/structure";
-import { barSeconds, BEATS_PER_BAR, dropBuildBars, mixOutPoint, nextBoundary, nextDownbeat } from "./mixpoints";
+import { barSeconds, BEATS_PER_BAR, dropBuildBars, mixOutFor, nextBoundary, nextDownbeat } from "./mixpoints";
 import {
   canLayer,
   chooseTransition,
@@ -121,8 +121,11 @@ export interface AutoDJStatus {
   paused: number | null;
   /** That pause is a hand on the jog wheel (a scratch): it plays on when let go. */
   holding: boolean;
-  /** A beat loop on the song on air (its deck and length in beats); the cued mix waits for it. */
-  loop: { deck: number; beats: number } | null;
+  /**
+   * Loops: playing on a deck (the song on air — the cued mix waits for it — or the song playing along), or
+   * `armed` on the cued song (it loops from its start once ▶ Play now starts it). `beats` is null for a saved loop.
+   */
+  loops: { deck: number; beats: number | null; start: number; end: number; armed: boolean }[];
   /** AI DJ mode: on, the auto-DJ mixes by itself; off, staff mix with Drop / ▶ Play now (it takes over near the end). */
   auto: boolean;
 }
@@ -169,8 +172,8 @@ export interface BoothSnapshot {
   activeFx: { kind: FxKind; auto: boolean }[];
   /** Two songs are layered and waiting for Drop to swap them. */
   layering: boolean;
-  /** A beat loop on the song on air (track seconds). */
-  loop: { deck: number; start: number; end: number } | null;
+  /** Loops playing or armed (track seconds), per deck. */
+  loops: { deck: number; start: number; end: number; armed: boolean }[];
 }
 
 export interface AutoDJDeps {
@@ -203,6 +206,8 @@ interface Planned {
     /** ▶ Play now: the two songs play together until the new one's drop (`swapAt`, context time) or Drop. */
     together?: boolean;
     swapAt?: number;
+    /** Context time to swap by at the latest (before either song runs out). */
+    safety?: number;
   };
   /** The set is paused: the song is loaded on its deck but nothing is scheduled (`plan` is HELD_PLAN). */
   held?: boolean;
@@ -271,8 +276,10 @@ export class AutoDJ {
   /** Staff paused the live deck: where its song stopped. */
   /** `jump`: a dialogue still to play from track position `from`, then on from `to` (its drop). `hold`: a hand on the jog wheel. */
   private paused: { deck: Deck; position: number; rate: number; jump?: { from: number; to: number }; hold: boolean } | null = null;
-  /** A beat loop on the song on air (track seconds; `beats` its length). */
-  private looping: { deck: Deck; start: number; end: number; beats: number } | null = null;
+  /** Loops playing, per deck (track seconds; `beats` null for a saved loop). */
+  private loops = new Map<Deck, { start: number; end: number; beats: number | null }>();
+  /** A loop armed on the cued song: it starts looping when ▶ Play now brings it in. */
+  private armed: { trackId: string; start: number; end: number; beats: number | null } | null = null;
   /** AI DJ mode (see AutoDJStatus.auto). */
   private auto = true;
   /** Re-plans the cued mix once staff stop moving a tempo slider. */
@@ -433,7 +440,8 @@ export class AutoDJ {
     this.openerEnd = null;
     this.fxWindows = [];
     this.paused = null;
-    this.looping = null;
+    this.loops.clear();
+    this.armed = null;
     await this.engine.fadeOutAndStop(STOP_FADE_SECONDS);
     for (const d of this.engine.decks) d.unload();
     this.current = null;
@@ -478,8 +486,8 @@ export class AutoDJ {
    */
   drop(): boolean {
     if (!this.playing || !this.current || this.recovering || this.paused) return false;
-    // Loop, then drop: the loop ends and the next song comes in on its drop.
-    this.endLoop();
+    // Loop, then drop: the loops let go and the next song comes in on its drop.
+    this.endLoops();
     // Two songs layered: Drop swaps them.
     if (this.planned?.layer) return this.finishLayer();
     // The live song is still in its dialogue: let it reach its drop first.
@@ -510,7 +518,7 @@ export class AutoDJ {
     const target = track ?? p?.track;
     const curBpm = this.currentBpm();
     if (!target || curBpm === null || !canLayer(cur.track, target, curBpm, this.mood.halfTime)) return false;
-    this.endLoop();
+    this.endLoops();
     const up = this.unplan();
     if (up && up.track.id === target.id) {
       this.scheduleLayer(up.track, up.buffer, up.requested, up.entry);
@@ -576,7 +584,7 @@ export class AutoDJ {
     const cur = this.current;
     if (!this.playing || !cur || this.recovering || this.paused) return false;
     // A pause (or a hand on the wheel) lets the loop go; the song carries on from there afterwards.
-    if (cur.deck.index === index) this.endLoop();
+    if (cur.deck.index === index) this.endLoopOn(cur.deck);
     const p = this.planned;
     const now = this.engine.now;
     const mixing = !!p && !p.held && now >= p.plan.start;
@@ -681,8 +689,7 @@ export class AutoDJ {
       return true;
     }
     // ▶ Play now while a song is on air (not during a mix, a layer or its dialogue).
-    this.endLoop();
-    if (!p || p.layer || p.deck.index !== index || p.plan.start <= now + SCHEDULE_MARGIN) return false;
+    if (!p || p.layer || p.deck.index !== index || (!p.held && p.plan.start <= now + SCHEDULE_MARGIN)) return false;
     if (cur.deck.pendingJump() !== null) return false;
     const a = cur.track.analysis!;
     const b = p.track.analysis!;
@@ -696,9 +703,12 @@ export class AutoDJ {
       b.beatConfidence >= MIN_BLEND_CONFIDENCE;
     const up = this.unplan();
     if (!up) return false;
-    // Too far apart in tempo to play in time together: mix it in on the next phrase instead.
+    // Too far apart in tempo to play in time together: mix it in on the next phrase instead (loops let go first).
     if (together) this.scheduleLayer(up.track, up.buffer, up.requested, up.entry, { together: true, tempo: up.tempo });
-    else this.schedule(up.track, up.buffer, up.requested, up.entry, { soon: true, tempo: up.tempo });
+    else {
+      this.endLoops();
+      this.schedule(up.track, up.buffer, up.requested, up.entry, { soon: true, tempo: up.tempo });
+    }
     return true;
   }
 
@@ -740,52 +750,156 @@ export class AutoDJ {
   }
 
   /**
-   * Beat loop on the song on air: `beats` long (¼ … 16), starting on the beat
-   * the playhead is in (so it plays on to the loop's end and wraps, on the
-   * grid). Pressed while looping, it resizes the loop from the same start. The
-   * cued mix waits (held) until the loop ends. Refused during a mix (or just
-   * before one), while paused and while the song is still in its dialogue.
+   * Beat loop, `beats` long (¼ … 16). On the song on air (or the song playing
+   * along) it starts on the beat the playhead is in, so it wraps on the grid;
+   * pressed while looping, it resizes from the same start. On the cued song
+   * before it plays it is armed from its start point: ▶ Play now brings the song
+   * in looping (stretching its intro) until Drop.
    */
   loop(index: number, beats: number): boolean {
-    const cur = this.current;
-    const a = cur?.track.analysis;
-    if (!this.playing || !cur || !a || cur.deck.index !== index || this.paused || this.recovering) return false;
-    const p = this.planned;
-    const now = this.engine.now;
-    if (p && !p.held && p.plan.start <= now + SCHEDULE_MARGIN + 1) return false;
-    const tl = cur.deck.timeline;
-    if (!tl || cur.deck.pendingJump() !== null) return false;
+    const deck = this.engine.decks[index];
+    const song = this.songOn(deck);
+    const a = song?.track.analysis;
+    if (!deck || !song || !a) return false;
     const beat = 60 / a.bpm;
     const length = beats * beat;
-    const pos = tl.positionAt(now + 0.03);
-    let start = this.looping ? this.looping.start : a.firstBeat + Math.floor((pos - a.firstBeat) / beat) * beat;
-    // Short loops: the first loop-length step that is still ahead of the playhead.
-    while (start + length <= pos + 0.02) start += length;
-    const end = Math.min(a.duration - 0.05, start + length);
-    if (end <= pos || !cur.deck.setLoop(start, end)) return false;
-    if (p && !p.held) this.holdPlanned(p);
-    this.looping = { deck: cur.deck, start, end, beats };
-    this.emit();
-    return true;
+    let start: number;
+    if (song.started) {
+      const tl = deck.timeline!;
+      const pos = tl.positionAt(this.engine.now + 0.03);
+      start = this.loops.get(deck)?.start ?? a.firstBeat + Math.floor((pos - a.firstBeat) / beat) * beat;
+      // Short loops: the first loop-length step that is still ahead of the playhead.
+      while (start + length <= pos + 0.02) start += length;
+    } else {
+      const from = this.armed?.trackId === song.track.id ? this.armed.start : this.planned!.startAt;
+      start = a.firstBeat + Math.round((from - a.firstBeat) / beat) * beat;
+    }
+    return this.loopAt(index, Math.max(0, start), Math.min(a.duration - 0.05, start + length), beats);
   }
 
-  /** Let the loop go: the song plays on, and the cued mix is planned again from there. */
-  exitLoop(index: number): boolean {
-    if (!this.looping || this.looping.deck.index !== index) return false;
-    this.endLoop();
+  /** A saved loop: loop there (jumping to it on the beat if the song is past it); on the cued song, arm it. */
+  savedLoop(index: number, start: number, end: number): boolean {
+    return this.loopAt(index, start, end, null);
+  }
+
+  /** The song on a deck that can loop now: on air, playing along, or cued and not started (armed). */
+  private songOn(deck: Deck | undefined): { track: Track; started: boolean } | null {
+    const cur = this.current;
     const p = this.planned;
-    const up = p?.held && !this.paused ? this.unplan() : null;
-    if (up) this.schedule(up.track, up.buffer, up.requested, up.entry, { deferred: up.deferred, tempo: up.tempo });
-    else if (!p) void this.planNext();
+    const now = this.engine.now;
+    if (!deck || !this.playing || !cur || this.recovering) return null;
+    if (deck === cur.deck) {
+      if (this.paused || deck.pendingJump() !== null) return null;
+      // Not while a mix is under way (or just about to start) — except a layer / playing together before its swap.
+      if (p && !p.held && (p.layer ? p.plan.drop !== undefined : p.plan.start <= now + SCHEDULE_MARGIN + 1)) return null;
+      return { track: cur.track, started: true };
+    }
+    if (p && deck === p.deck) {
+      if (p.layer && now >= p.plan.start) return p.plan.drop === undefined && deck.pendingJump() === null ? { track: p.track, started: true } : null;
+      if (!p.layer && (p.held || p.plan.start > now + SCHEDULE_MARGIN + 1)) return { track: p.track, started: false };
+    }
+    return null;
+  }
+
+  private loopAt(index: number, start: number, end: number, beats: number | null): boolean {
+    const deck = this.engine.decks[index];
+    const song = this.songOn(deck);
+    const a = song?.track.analysis;
+    if (!song || !a || end <= start) return false;
+    const p = this.planned;
+    if (!song.started) {
+      // Arm it on the cued song, which now starts from the loop's start.
+      this.armed = { trackId: song.track.id, start, end, beats };
+      this.setEntry({ kind: "bar", bar: (start - a.firstBeat) / barSeconds(a) });
+      this.emit();
+      return true;
+    }
+    const tl = deck.timeline!;
+    const now = this.engine.now;
+    // Past the loop: jump to its start on the next beat, then loop.
+    if (tl.positionAt(now + 0.03) >= end) {
+      const at = tl.timeAt(nextBoundary(a, tl.positionAt(now + 0.08), 1 / BEATS_PER_BAR));
+      if (!deck.jumpAt(at, start)) return false;
+    }
+    if (!deck.setLoop(start, end)) return false;
+    this.loops.set(deck, { start, end, beats });
+    if (deck === this.current!.deck) {
+      // The song on air loops: a planned mix waits (a song playing along carries on).
+      if (p && !p.held && !p.layer) this.holdPlanned(p);
+    } else if (p?.layer) {
+      // The song playing along loops: its drop won't come, so it waits for Drop (or swaps before the song on air ends).
+      p.layer.swapAt = undefined;
+      this.armSafetySwap(p);
+    }
     this.emit();
     return true;
   }
 
-  /** End a loop without re-planning (the caller plans what comes next). */
-  private endLoop(): void {
-    if (!this.looping) return;
-    this.looping.deck.clearLoop();
-    this.looping = null;
+  /** Let the loop on a deck go (or disarm the cued song's): the song plays on from there. */
+  exitLoop(index: number): boolean {
+    const deck = this.engine.decks[index];
+    const p = this.planned;
+    if (p && deck === p.deck && this.armed?.trackId === p.track.id && !this.loops.has(deck)) {
+      this.armed = null;
+      this.emit();
+      return true;
+    }
+    if (!deck || !this.loops.has(deck)) return false;
+    this.endLoopOn(deck);
+    if (deck === this.current?.deck) {
+      // The song on air: the held mix is planned again from where it is now.
+      const up = p?.held && !this.paused ? this.unplan() : null;
+      if (up) this.schedule(up.track, up.buffer, up.requested, up.entry, { deferred: up.deferred, tempo: up.tempo });
+      else if (!p) void this.planNext();
+    } else if (p?.layer?.together && deck === p.deck) {
+      // Playing along again: they swap at its next drop.
+      this.armDropSwap(p);
+    }
+    this.emit();
+    return true;
+  }
+
+  /** The song on air is looping (its planned mix waits). */
+  private liveLooping(): boolean {
+    return !!this.current && this.loops.has(this.current.deck);
+  }
+
+  private endLoopOn(deck: Deck): void {
+    if (!this.loops.has(deck)) return;
+    deck.clearLoop();
+    this.loops.delete(deck);
+  }
+
+  /** Every loop lets go (Drop, a mix, Layer). */
+  private endLoops(): void {
+    for (const deck of [...this.loops.keys()]) this.endLoopOn(deck);
+  }
+
+  /** A layer / song playing along swaps at the latest before either song runs out. */
+  private armSafetySwap(p: Planned): void {
+    clearTimeout(p.timer);
+    const safety = p.layer?.safety ?? this.engine.now + 60;
+    p.timer = setTimeout(() => this.finishLayer(), Math.max(0, (safety - SCHEDULE_MARGIN - 1 - this.engine.now) * 1000));
+  }
+
+  /** Playing together: arm the swap at the song's next drop from where it is now (else the safety swap). */
+  private armDropSwap(p: Planned): void {
+    const b = p.track.analysis!;
+    const tl = p.deck.timeline;
+    const now = this.engine.now;
+    const barB = barSeconds(b);
+    const pos = tl ? tl.positionAt(now) : p.startAt;
+    const drop = b.barLevels ? drops(b.barLevels, b.fullLevel).find((d) => b.firstBeat + d.start * barB > pos + barB / 2) : undefined;
+    const swapAt = drop && tl ? tl.timeAt(b.firstBeat + drop.start * barB) : undefined;
+    if (!p.layer) return;
+    if (swapAt !== undefined && swapAt > now + SCHEDULE_MARGIN + 1 && swapAt <= (p.layer.safety ?? Infinity)) {
+      clearTimeout(p.timer);
+      p.layer.swapAt = swapAt;
+      p.timer = setTimeout(() => this.finishLayer(swapAt), Math.max(0, (swapAt - SCHEDULE_MARGIN - 1 - now) * 1000));
+    } else {
+      p.layer.swapAt = undefined;
+      this.armSafetySwap(p);
+    }
   }
 
   /**
@@ -841,7 +955,7 @@ export class AutoDJ {
    * while it's still in a dialogue.
    */
   jumpTo(index: number, to: number): boolean {
-    if (this.looping) this.exitLoop(index);
+    if (this.current && this.loops.has(this.current.deck)) this.exitLoop(index);
     const cur = this.current;
     const a = cur?.track.analysis;
     if (!this.playing || !cur || !a || cur.deck.index !== index || this.recovering) return false;
@@ -929,6 +1043,9 @@ export class AutoDJ {
   /** ⏸ on the outgoing deck during a mix: it stops and the incoming song carries on alone. */
   private takeOver(p: Planned): boolean {
     const cur = this.current!;
+    // The song taking over plays on (a loop on it lets go); the one stopping needs none.
+    this.endLoopOn(p.deck);
+    this.loops.delete(cur.deck);
     const now = this.engine.now;
     clearTimeout(p.timer);
     this.cancelTransitionFx(p);
@@ -951,6 +1068,7 @@ export class AutoDJ {
   /** ⏸ on the incoming deck during a mix: it stops, the outgoing song carries on, and it comes in again later. */
   private cancelMix(p: Planned): void {
     const cur = this.current!;
+    this.loops.delete(p.deck);
     clearTimeout(p.timer);
     this.cancelTransitionFx(p);
     p.deck.fadeOutAndStop(PAUSE_FADE);
@@ -1161,7 +1279,7 @@ export class AutoDJ {
       }
       const entry = (loaded.requested && this.requestEntries.get(loaded.track.id)) || { kind: "auto" as const };
       this.requestEntries.delete(loaded.track.id);
-      if (this.paused || this.looping) this.hold(loaded.track, loaded.buffer, loaded.requested, entry);
+      if (this.paused || this.liveLooping()) this.hold(loaded.track, loaded.buffer, loaded.requested, entry);
       else this.schedule(loaded.track, loaded.buffer, loaded.requested, entry);
       void this.prepareStandby();
     } finally {
@@ -1200,6 +1318,8 @@ export class AutoDJ {
     const target = opts.tempo ?? 1;
     const staffDrop = this.dropRequested;
     this.dropRequested = false;
+    // The song on air's cue out (track editor): its hand-over lands there instead of at its own mix-out point.
+    const cueOut = cur.track.cues?.end;
     // AI DJ off: no automatic mix — it waits for Drop / ▶ Play now and only comes in by itself near the end.
     const manual = !this.auto && !staffDrop && !opts.soon;
     const opener = this.openerEnd !== null && !manual;
@@ -1236,8 +1356,8 @@ export class AutoDJ {
       let mixPos = opts.soon
         ? nextBoundary(a, earliest, DROP_BOUNDARY_BARS)
         : opts.deferred || manual
-          ? mixOutPoint(a, bars, earliest)
-          : mixOutPoint(a, bars, earliest, mood, leadBars);
+          ? mixOutFor(a, cueOut, bars, earliest, undefined, leadBars)
+          : mixOutFor(a, cueOut, bars, earliest, mood, leadBars);
       let t = tl.timeAt(mixPos);
       if (t < now + 1) {
         mixPos = nextDownbeat(a, earliest);
@@ -1262,9 +1382,9 @@ export class AutoDJ {
       if (staffDrop || opts.soon) T = tl.timeAt(nextBoundary(a, earliest, resolved.dialogue ? 1 : DROP_BOUNDARY_BARS));
       else if (opener) T = tl.timeAt(Math.max(this.openerEnd!, earliest));
       // Desi Night (or a mix staff paused): near the end of the song (the outro), unless Drop comes first.
-      else if (mood.holdForDrop || opts.deferred || manual) T = tl.timeAt(mixOutPoint(a, 8, earliest));
+      else if (mood.holdForDrop || opts.deferred || manual) T = tl.timeAt(mixOutFor(a, cueOut, 8, earliest, undefined, 0));
       // On the breakdown a blend's bass swap was aimed at.
-      else T = tl.timeAt(mixOutPoint(a, bars, earliest, mood, leadBars) + leadBars * barSeconds(a));
+      else T = tl.timeAt(mixOutFor(a, cueOut, bars, earliest, mood, leadBars) + leadBars * barSeconds(a));
       if (T < now + 1) T = tl.timeAt(nextDownbeat(a, earliest));
       const outBpm = a.bpm * tl.rateAt(T);
       const outBeat = 60 / outBpm;
@@ -1439,19 +1559,24 @@ export class AutoDJ {
     inc.load(track, buffer, this.loudnessTarget());
     const plan = layerIn(cur.deck, inc, t, outBeat);
     inc.start(t, startAt, rate);
+    // A loop armed on it (▶ Play now): it comes in looping, until Drop.
+    const armed = opts.together && this.armed?.trackId === track.id ? this.armed : null;
+    this.armed = null;
+    if (armed && inc.setLoop(armed.start, armed.end)) this.loops.set(inc, { start: armed.start, end: armed.end, beats: armed.beats });
 
     // Safety: swap by itself well before the current song's outro or the layered song's end.
-    const outroAt = tl.timeAt(mixOutPoint(a, 8, earliest));
+    // (Or its cue out.)
+    const outroAt = tl.timeAt(mixOutFor(a, cur.track.cues?.end, 8, earliest, undefined, 0));
     const layeredEnds = t + (b.duration - startAt) / rate - 32 * outBeat;
     // Playing together: they swap when the new song reaches its first drop after where it starts.
     const barB = barSeconds(b);
     const drop = opts.together && b.barLevels ? drops(b.barLevels, b.fullLevel).find((d) => b.firstBeat + d.start * barB > startAt + barB / 2) : undefined;
     const swapAt = drop ? t + (b.firstBeat + drop.start * barB - startAt) / rate : undefined;
     const safety = Math.min(outroAt, layeredEnds);
-    const timer =
-      swapAt !== undefined && swapAt <= safety
-        ? setTimeout(() => this.finishLayer(swapAt), Math.max(0, (swapAt - SCHEDULE_MARGIN - 1 - this.engine.now) * 1000))
-        : setTimeout(() => this.finishLayer(), Math.max(0, (safety - SCHEDULE_MARGIN - 1 - this.engine.now) * 1000));
+    const dropSwap = !armed && swapAt !== undefined && swapAt <= safety;
+    const timer = dropSwap
+      ? setTimeout(() => this.finishLayer(swapAt), Math.max(0, (swapAt - SCHEDULE_MARGIN - 1 - this.engine.now) * 1000))
+      : setTimeout(() => this.finishLayer(), Math.max(0, (safety - SCHEDULE_MARGIN - 1 - this.engine.now) * 1000));
     this.planned = {
       deck: inc,
       track,
@@ -1464,7 +1589,7 @@ export class AutoDJ {
       holding: false,
       fx: false,
       tempo: opts.tempo,
-      layer: { rate, together: opts.together, swapAt: swapAt !== undefined && swapAt <= safety ? swapAt : undefined },
+      layer: { rate, together: opts.together, swapAt: dropSwap ? swapAt : undefined, safety },
     };
     this.note = opts.together
       ? `${track.title} plays along — it mixes in at its drop, or press Drop`
@@ -1477,6 +1602,8 @@ export class AutoDJ {
     const p = this.planned;
     const cur = this.current;
     if (!p?.layer || p.plan.drop !== undefined || !cur?.deck.timeline || !this.playing) return false;
+    // The new song plays on after the swap.
+    this.endLoopOn(p.deck);
     const a = cur.track.analysis!;
     const tl = cur.deck.timeline;
     const now = this.engine.now;
@@ -1506,7 +1633,10 @@ export class AutoDJ {
     const prev = this.current;
     if (!p || !this.playing) return;
     this.planned = null;
+    // A loop armed for ▶ Play now doesn't apply when the auto-DJ mixed the song in by itself.
+    if (this.armed?.trackId === p.track.id) this.armed = null;
     if (prev) {
+      this.loops.delete(prev.deck);
       prev.deck.resetControls(0);
       prev.deck.unload();
     }
@@ -1682,7 +1812,7 @@ export class AutoDJ {
           : null,
       ),
       mix: p && !p.held ? { start: p.plan.start, end: p.plan.end, drop: p.plan.drop } : null,
-      loop: this.looping ? { deck: this.looping.deck.index, start: this.looping.start, end: this.looping.end } : null,
+      loops: this.loopList().map(({ deck, start, end, armed }) => ({ deck, start, end, armed })),
       mixOutPosition: p && !p.held && liveTl ? liveTl.positionAt(p.plan.start) : null,
       dropLocked: this.current?.deck.pendingJump(this.engine.now) != null,
       layering: !!p?.layer && p.plan.drop === undefined && this.engine.now >= p.plan.start,
@@ -1690,6 +1820,15 @@ export class AutoDJ {
         .filter((w) => w.start <= this.engine.now && this.engine.now < w.end)
         .map(({ kind, auto }) => ({ kind, auto })),
     };
+  }
+
+  /** Loops playing and the one armed on the cued song, for the booth. */
+  private loopList(): AutoDJStatus["loops"] {
+    const list: AutoDJStatus["loops"] = [...this.loops].map(([d, l]) => ({ deck: d.index, beats: l.beats, start: l.start, end: l.end, armed: false }));
+    const p = this.planned;
+    if (this.armed && p && p.track.id === this.armed.trackId)
+      list.push({ deck: p.deck.index, beats: this.armed.beats, start: this.armed.start, end: this.armed.end, armed: true });
+    return list;
   }
 
   private emit(): void {
@@ -1735,7 +1874,7 @@ export class AutoDJ {
       keyLock: this.keyLockReady,
       paused: this.paused?.deck.index ?? null,
       holding: !!this.paused?.hold,
-      loop: this.looping ? { deck: this.looping.deck.index, beats: this.looping.beats } : null,
+      loops: this.loopList(),
       auto: this.auto,
     });
   }

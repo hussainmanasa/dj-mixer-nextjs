@@ -46,7 +46,9 @@ Open http://localhost:3000, then:
    it, or press its % button, to go back to the song's own tempo. **Sync** under it sets that deck to the other deck's BPM. **Cue pads A–H**
    on each deck: an empty pad saves the spot, a set pad jumps there on the beat (on a cued deck it sets the start);
    Shift-click or Clear empties one. **Loop** buttons (¼–16 beats) on the song on air repeat that many
-   beats on the beat until you press it again (the next mix waits). The **AI DJ** switch under Play / Stop turns
+   beats on the beat until you press it again (the next mix waits); on the cued deck a loop is armed and the song
+   comes in looping when you press ▶ Play now, until Drop. **Saved loops** (L1–L4, made on the song's waveform in
+   the track editor) are one tap on the deck. The **AI DJ** switch under Play / Stop turns
    automatic mixing off: the next song is still cued and waits for **Drop**; near the song's end the AI DJ takes over. The wheel's centre shows the song's cover art. ▶ **Play now** on the cued deck starts it playing
    together with the song on air (beat-matched); they swap at the new song's drop, or when you press **Drop**. The auto-DJ keeps running throughout — no need to press Stop.
    **Track view** above the decks shows the songs one below another: a scrolling waveform with the beat grid,
@@ -78,7 +80,9 @@ the venue's public performance licences current (in India, for example, PPL and 
 
 ## Admin
 
-- **Library** — folder, analysis, deck count and key lock (beta). The track table shows your music folder as it is
+- **Library** — folder, analysis, deck count and key lock (beta). Press **Save settings in the music folder** once
+  and the app keeps `ai-dj-mixer-settings.json` there (settings and every song's edits); open the folder on any
+  computer and they come back. The track table shows your music folder as it is
   (folders and subfolders that open and close, with song counts and analysis progress; or a plain List). Every setting applies straight away, also
   during a set and from another browser tab — no refresh or Stop needed. The track table flags problems
   (*Needs attention*); **Edit** a track to mark it *Favourite* / *Never play*, add it to crates, fix its beat grid

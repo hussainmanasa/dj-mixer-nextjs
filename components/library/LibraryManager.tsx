@@ -96,6 +96,7 @@ export function LibraryManager() {
             )}
           </div>
           {s.error && <p className="mt-3 text-sm text-bad">{s.error}</p>}
+          {s.folder && s.folderState === "ready" && <SettingsFileNote />}
           {s.analysis && (
             <div className="mt-4">
               <p className="text-sm text-muted">
@@ -154,5 +155,55 @@ export function LibraryManager() {
 
       <TrackTable />
     </main>
+  );
+}
+
+/** m/d hh:mm in the venue's locale. */
+function when(ms: number): string {
+  return new Date(ms).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * The settings file kept in the music folder: settings and every song's edits
+ * travel with the music to any computer, and are read back whenever the folder
+ * is opened or rescanned.
+ */
+function SettingsFileNote() {
+  const f = useLibrary((s) => s.settingsFile);
+  const enable = useLibrary((s) => s.enableSettingsFile);
+  return (
+    <div className="mt-4 rounded-xl border border-border bg-surface-2/60 p-3 text-sm" role="status" aria-label="Settings file">
+      {f.status === "saved" && (
+        <p>
+          Settings and song edits are saved in the music folder as <span className="font-mono">{f.name}</span>
+          {f.savedAt ? ` · ${when(f.savedAt)}` : ""} — open this folder on any computer to get them back.
+        </p>
+      )}
+      {f.status === "readonly" && (
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="flex-1">
+            {f.name ? (
+              <>
+                Read settings from <span className="font-mono">{f.name}</span> in the music folder. Allow the app to update it so your changes are
+                kept there too.
+              </>
+            ) : (
+              <>Save the app&apos;s settings and every song&apos;s edits in the music folder, so they go wherever the music goes.</>
+            )}
+          </p>
+          <button type="button" className="btn-primary" onClick={() => void enable()}>
+            Save settings in the music folder
+          </button>
+        </div>
+      )}
+      {f.status === "error" && <p className="text-bad">Couldn&apos;t use the settings file: {f.error}</p>}
+      {f.imported && (
+        <p className="mt-1 text-good">
+          Imported settings{f.imported.songs ? ` and edits for ${f.imported.songs} song${f.imported.songs === 1 ? "" : "s"}` : ""} from{" "}
+          <span className="font-mono">{f.name}</span>
+          {f.savedAt ? ` (saved ${when(f.savedAt)})` : ""}.
+        </p>
+      )}
+    </div>
   );
 }

@@ -7,6 +7,8 @@ import { useMemo } from "react";
 import { create } from "zustand";
 import { analyzeFile } from "@/lib/analysis/analyze";
 import { GridPreview, sharedPreview } from "@/lib/library/preview";
+import { applySettingsFile, buildSettingsFile, contentKey, SETTINGS_FILE } from "@/lib/library/settingsFile";
+import { canWrite, readSettingsFile, requestWrite, writeSettingsFile } from "@/lib/library/settingsFolder";
 import { ANALYSIS_VERSION } from "@/lib/analysis/bpm";
 import { ensurePermission, fileId, getFileAt, isSupported, pickFolder, trackFromFile, walk } from "@/lib/library/scan";
 import {
@@ -16,11 +18,13 @@ import {
   loadTracks,
   saveFolderHandle,
   saveSettings,
+  saveSettingsSync,
+  loadSettingsSync,
   saveTracks,
   type Settings,
 } from "@/lib/library/store";
 import { getMood, resolveMoods } from "@/lib/dj/moods";
-import { HOT_CUES, MAX_DECKS, MIN_DECKS, type Mood, type MoodId, type Track, type TrackAnalysis, type TrackCues, type TrackFlag, type TrackOverrides } from "@/lib/types";
+import { HOT_CUES, MAX_DECKS, MAX_SAVED_LOOPS, MIN_DECKS, type Mood, type MoodId, type Track, type TrackAnalysis, type TrackCues, type TrackFlag, type TrackOverrides } from "@/lib/types";
 
 export type FolderState = "none" | "needs-permission" | "ready";
 
@@ -33,6 +37,16 @@ interface LibraryState {
   scanning: boolean;
   analysis: { done: number; total: number; current: string | null } | null;
   error: string | null;
+  /**
+   * The settings file in the music folder (lib/library/settingsFile.ts): `saved` (kept up to date), `readonly`
+   * (the app may not write into the folder yet), `none` (no folder), `error`. `imported`: songs whose edits came
+   * from the file the last time it was read.
+   */
+  settingsFile: { status: "none" | "readonly" | "saved" | "error"; name?: string; savedAt?: number; imported?: { at: number; songs: number }; error?: string };
+  /** Read the folder's settings file and take it over if it is newer than this computer's last sync. */
+  syncSettingsFile: () => Promise<void>;
+  /** Let the app write the settings file into the music folder (asks Chrome's "edit files" permission). */
+  enableSettingsFile: () => Promise<void>;
 
   hydrate: () => Promise<void>;
   chooseFolder: () => Promise<void>;
@@ -60,6 +74,8 @@ interface LibraryState {
   setCues: (id: string, cues: { [K in keyof TrackCues]?: number | null }) => Promise<void>;
   /** Save (or clear, with null) hot cue `slot` (0–7) of a song, in track seconds. */
   setHotCue: (id: string, slot: number, seconds: number | null) => Promise<void>;
+  /** A song's saved loops (sorted by start, at most MAX_SAVED_LOOPS). */
+  setSavedLoops: (id: string, loops: { start: number; end: number }[]) => Promise<void>;
   /**
    * Admin fixes. A new beat grid re-analyses the track on it (resolves when
    * done); drop sensitivity and key apply at once. `null` clears an override.
@@ -94,6 +110,38 @@ async function persistSettings(settings: Settings): Promise<void> {
 
 let volumeSave: ReturnType<typeof setTimeout> | undefined;
 
+// The settings file in the music folder: written (debounced) whenever settings or song edits change, once the
+// folder's own file has been read (`synced`), so a new computer never overwrites it with an empty one.
+let synced: FileSystemDirectoryHandle | null = null;
+let lastWritten = "";
+let fileTimer: ReturnType<typeof setTimeout> | undefined;
+
+function saveSettingsFileSoon() {
+  clearTimeout(fileTimer);
+  fileTimer = setTimeout(() => void writeSettingsNow(false), 1000);
+}
+
+async function writeSettingsNow(force: boolean) {
+  const s = useLibrary.getState();
+  const folder = s.folder;
+  if (!folder || s.folderState !== "ready" || synced !== folder) return;
+  try {
+    if (!(await canWrite(folder))) {
+      if (s.settingsFile.status !== "readonly") useLibrary.setState({ settingsFile: { ...s.settingsFile, status: "readonly" } });
+      return;
+    }
+    const file = buildSettingsFile(s.settings, s.tracks, Date.now());
+    const key = contentKey(file);
+    if (!force && key === lastWritten && s.settingsFile.name === SETTINGS_FILE) return;
+    await writeSettingsFile(folder, file);
+    lastWritten = key;
+    await saveSettingsSync(file.savedAt);
+    useLibrary.setState({ settingsFile: { ...useLibrary.getState().settingsFile, status: "saved", name: SETTINGS_FILE, savedAt: file.savedAt } });
+  } catch (err) {
+    useLibrary.setState({ settingsFile: { status: "error", error: err instanceof Error ? err.message : String(err) } });
+  }
+}
+
 /** A slider sends many changes: save the settings once it settles. */
 function saveSoon() {
   clearTimeout(volumeSave);
@@ -109,6 +157,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   scanning: false,
   analysis: null,
   error: null,
+  settingsFile: { status: "none" },
 
   async hydrate() {
     if (get().hydrated) return;
@@ -120,13 +169,15 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     GridPreview.sinkId = settings.previewOutput ?? "";
     sharedPreview.setVolume(settings.previewVolume);
     set({ hydrated: true, folder: folder ?? null, folderState, tracks, settings });
+    if (folderState === "ready") await get().syncSettingsFile();
   },
 
   async chooseFolder() {
     try {
       const folder = await pickFolder();
       await saveFolderHandle(folder);
-      set({ folder, folderState: "ready", error: null });
+      synced = null;
+      set({ folder, folderState: "ready", error: null, settingsFile: { status: "none" } });
       await get().rescan();
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
@@ -139,7 +190,10 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     if (!folder) return false;
     const ok = await ensurePermission(folder, true);
     set({ folderState: ok ? "ready" : "needs-permission" });
-    if (ok) void get().analyzePending();
+    if (ok) {
+      await get().syncSettingsFile();
+      void get().analyzePending();
+    }
     return ok;
   },
 
@@ -160,6 +214,8 @@ export const useLibrary = create<LibraryState>((set, get) => ({
       for (const t of Object.values(existing)) if (t.path.startsWith(SESSION_PREFIX) && !next[t.id]) next[t.id] = t;
       await persistTracks(next);
       set({ tracks: next });
+      // Settings and song edits kept in the folder apply before analysis (a fixed beat grid is analysed as fixed).
+      await get().syncSettingsFile();
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) });
     } finally {
@@ -230,6 +286,61 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     const settings = { ...get().settings, keyLock: on };
     set({ settings });
     await persistSettings(settings);
+  },
+
+  async syncSettingsFile() {
+    const { folder, folderState } = get();
+    if (!folder || folderState !== "ready") return;
+    try {
+      const found = await readSettingsFile(folder);
+      const writable = await canWrite(folder);
+      if (found && found.file.savedAt > (await loadSettingsSync())) {
+        // Newer than this computer's last sync (another computer, or this is a new one): take it over.
+        const settings = { ...get().settings, ...found.file.settings };
+        const changed = applySettingsFile(found.file, get().tracks);
+        for (const [id, t] of Object.entries(changed)) {
+          const before = get().tracks[id];
+          const gridChanged = t.overrides?.bpm !== before?.overrides?.bpm || t.overrides?.firstBeat !== before?.overrides?.firstBeat;
+          // A fixed beat grid is analysed again; a key or drop fix applies to the analysis as it is.
+          if (gridChanged && t.analysis) changed[id] = { ...t, status: "pending", analysis: null };
+          else if (t.analysis) changed[id] = withAnalysis(t, t.analysis);
+        }
+        const tracks = { ...get().tracks, ...changed };
+        GridPreview.sinkId = settings.previewOutput ?? "";
+        sharedPreview.setVolume(settings.previewVolume);
+        set({ settings, tracks });
+        await persistSettings(settings);
+        if (Object.keys(changed).length) await persistTracks(tracks);
+        lastWritten = contentKey(buildSettingsFile(settings, tracks, 0));
+        await saveSettingsSync(found.file.savedAt);
+        set({
+          settingsFile: {
+            status: writable ? "saved" : "readonly",
+            name: found.name,
+            savedAt: found.file.savedAt,
+            imported: { at: Date.now(), songs: Object.keys(changed).length },
+          },
+        });
+      } else {
+        set({ settingsFile: { ...get().settingsFile, status: writable ? "saved" : "readonly", name: found?.name, savedAt: found?.file.savedAt } });
+      }
+      synced = folder;
+      // Write ours if it's missing or this computer has newer changes.
+      if (writable) saveSettingsFileSoon();
+    } catch (err) {
+      set({ settingsFile: { status: "error", error: err instanceof Error ? err.message : String(err) } });
+    }
+  },
+
+  async enableSettingsFile() {
+    const { folder } = get();
+    if (!folder) return;
+    if (!(await requestWrite(folder))) {
+      set({ settingsFile: { ...get().settingsFile, status: "readonly" } });
+      return;
+    }
+    if (synced !== folder) await get().syncSettingsFile();
+    await writeSettingsNow(true);
   },
 
   setVolume(volume) {
@@ -310,6 +421,15 @@ export const useLibrary = create<LibraryState>((set, get) => ({
       pads[slot] = seconds === null ? null : Math.round(seconds * 1000) / 1000;
       return { ...t, hotCues: pads.some((p) => p !== null) ? pads : undefined };
     });
+  },
+
+  async setSavedLoops(id, loops) {
+    const clean = loops
+      .filter((l) => l.end > l.start)
+      .map((l) => ({ start: Math.round(l.start * 1000) / 1000, end: Math.round(l.end * 1000) / 1000 }))
+      .sort((x, y) => x.start - y.start)
+      .slice(0, MAX_SAVED_LOOPS);
+    await patchTrack(id, (t) => ({ ...t, savedLoops: clean.length ? clean : undefined }));
   },
 
   async setOverrides(id, changes) {
@@ -414,3 +534,8 @@ if (channel) {
     }
   };
 }
+
+// Settings or song edits changed: keep the folder's settings file up to date.
+useLibrary.subscribe((state, prev) => {
+  if (state.settings !== prev.settings || state.tracks !== prev.tracks) saveSettingsFileSoon();
+});

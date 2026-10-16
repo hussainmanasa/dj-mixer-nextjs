@@ -64,6 +64,15 @@ export async function saveTracks(tracks: Record<string, Track>): Promise<void> {
   if (db) await set(KEYS.tracks, tracks, db);
 }
 
+/** The settings file in the music folder: when this computer last read or wrote it (its `savedAt`). */
+export async function loadSettingsSync(): Promise<number> {
+  return (db ? await get<number>("settingsFile:syncedAt", db) : undefined) ?? 0;
+}
+
+export async function saveSettingsSync(savedAt: number): Promise<void> {
+  if (db) await set("settingsFile:syncedAt", savedAt, db);
+}
+
 /** A song's detailed waveform for the booth's track view (see lib/analysis/waveform.ts). */
 export async function loadWave(trackId: string): Promise<Waveform | undefined> {
   return db ? get<Waveform>(`wave:${trackId}`, db) : undefined;

@@ -80,7 +80,8 @@ export function openerWindow(track: Track): { start: number; end: number } {
 export function validateCues(c: TrackCues, duration: number): string[] {
   const errors: string[] = [];
   const inside = (v: number | undefined) => v === undefined || (v >= 0 && v <= duration);
-  if (![c.start, c.hookStart, c.hookEnd, c.dialogueStart, c.dialogueEnd].every(inside)) errors.push("Markers must be inside the song.");
+  if (![c.start, c.end, c.hookStart, c.hookEnd, c.dialogueStart, c.dialogueEnd].every(inside)) errors.push("Markers must be inside the song.");
+  if (c.start !== undefined && c.end !== undefined && c.end <= c.start) errors.push("The cue out must come after the cue in.");
   if (c.hookStart !== undefined && c.hookEnd !== undefined && c.hookEnd <= c.hookStart) errors.push("The hook must end after it starts.");
   if (c.dialogueStart !== undefined && c.dialogueEnd !== undefined && c.dialogueEnd <= c.dialogueStart)
     errors.push("The dialogue must end after it starts.");

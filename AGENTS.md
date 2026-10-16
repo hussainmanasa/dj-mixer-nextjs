@@ -46,7 +46,10 @@ Full product plan: https://claude.ai/code/artifact/903692c7-9f12-49a9-9de1-5a82b
    (¼–16 beats) on the song on air, and an **AI DJ on/off** switch: off, the auto-DJ still cues the best next song but
    doesn't mix by itself (Up next waits for Drop / ▶ Play now); if nobody mixes it comes in near the song's end and AI
    DJ switches back on, so the music never stops. (17 Oct 2026) **▶ Play now** on the cued deck while a song is on
-   air plays both songs together (beat-matched) — nothing mixes out until the new song's drop or Drop.
+   air plays both songs together (beat-matched) — nothing mixes out until the new song's drop or Drop. (17 Oct)
+   **Saved loops** per song (track editor) and **loops on the cued deck** (armed before it plays, looping while
+   playing together until Drop). **Cue in / cue out** markers (cue out: where the auto-DJ hands over), and the
+   **settings file in the music folder** (settings + song edits travel with the music).
    Every action goes through `AutoDJ`: it still beat-matches, chooses the transition, times it on the grid
    and steers back to the mood. Do not add manual decks, crossfader, per-deck EQ/faders, skip/seek or an
    energy slider, and never let UI write to deck automation directly.
@@ -212,6 +215,24 @@ out the playing, cued and already-queued tracks.
 Offline: `public/sw.js` caches `/_next/static` (cache-first), pages and RSC (network-first) and other assets
 (stale-while-revalidate); registered only in production. `experimental.useOffline` powers the banner. A
 reload or reboot works offline for any page opened before; in-app navigation waits until the network is back.
+
+Cue in / cue out: `TrackCues.start` (shown as "Cue in"; Start from: Auto starts there) and `TrackCues.end` ("Cue out").
+`mixOutFor(a, cueOut, …)` (mixpoints.ts, PURE, tested) starts the transition `leadBars` before the cue out so its
+hand-over lands there, when it is still ahead; otherwise `mixOutPoint`. `schedule` uses it for blends, landing entries
+(drop swaps, Desi Night / AI DJ-off holds) and the layer safety swap; the track view's MIX marker follows.
+
+Settings file (`lib/library/settingsFile.ts` PURE + tested, `settingsFolder.ts` client): `ai-dj-mixer-settings.json`
+in the music folder's root — portable settings (deck count, key lock, mood edits, volumes; never device ids) and each
+edited song's `editsOf` (flag, crates, cues, hot cues, saved loops, overrides) keyed by content id with path / title.
+`useLibrary.syncSettingsFile()` runs on hydrate (folder ready), after a reconnect and after every scan (before
+analysis, so a fixed grid is analysed fixed): it reads our file, else any root `.json` that parses as ours, and
+imports it when its `savedAt` is newer than this computer's last sync (`settingsFile:syncedAt` in IndexedDB) —
+settings merged, edits applied by id else path (`applySettingsFile`; grid fixes re-analyse, key / drop fixes
+re-apply). Writing needs `readwrite` permission: `enableSettingsFile()` asks (a click), after which a subscription
+rewrites the file 1 s after any change to settings or edits (skipped when `contentKey` is unchanged) — never before
+the folder's own file has been read (`synced`), so a fresh computer can't overwrite it. `settingsFile` state drives
+the note on the Library page. The file wins when it is newer: unsaved local edits made without write permission can
+be replaced by a newer file.
 
 Song markers on the waveform (`components/library/MarkerWaveform.tsx`, top of the track editor's Song markers):
 an overview of the whole song (click / drag to look there, double-click to listen) and a zoomed view (2–32 s,
@@ -386,6 +407,21 @@ its start is extrapolated from `DeckView.startsAt`, so it scrolls in. Drawn on t
 the cued / loaded start ("IN"). Zoom: 4–32 s across. Workers: a second `new Worker(new URL(…))` was handed the
 analysis worker's entry by the production bundler, so all CPU work shares `analyze.worker.ts` (messages carry
 `kind`).
+
+Loops are per deck (`AutoDJ.loops`: Map<Deck, …>) plus one `armed` loop for the cued song. `loop(i, beats)` and
+`savedLoop(i, start, end)` go through `loopAt` on whichever song is on that deck (`songOn`): the song on air (not
+paused / in a dialogue / during a mix — a layer or playing together before its swap is fine), the song playing along
+(started layer, before its swap), or the cued song before it plays — then the loop is armed (`armed`, and its Start
+from becomes the loop's start as a bar entry) and `scheduleLayer(…, { together })` engages it when ▶ Play now starts
+the song (`Deck.setLoop` on a source not yet started sets the loop without rebasing). A song playing along that loops
+has its drop swap cancelled (`swapAt` cleared; `armSafetySwap` keeps the swap before the song on air runs out);
+exiting re-arms the swap at its next drop (`armDropSwap`). Drop, a mix, Layer and the safety swap let loops go
+(`endLoops` / `endLoopOn`); takeOver, cancelMix and handover forget the decks that went. A loop past the playhead
+(saved loops) jumps there on the next beat first (`jumpAt`). An armed loop is dropped if the auto-DJ mixes the song in
+by itself. Saved loops: `Track.savedLoops` (≤ `MAX_SAVED_LOOPS` = 4, `useLibrary.setSavedLoops`), made / dragged /
+listened / deleted on the track editor's waveform (`MarkerWaveform`: start on a bar, edges on the beat grid), shown
+as deck buttons, outlined in the track view (loops playing shaded, armed ones with dashed edges). `status.loops` /
+`snapshot.loops` list them.
 
 Loops (`AutoDJ.loop(i, beats)` / `exitLoop`, `LoopButtons` in `DeckPanel`): `Deck.setLoop(start, end)` sets
 `AudioBufferSourceNode.loop` / `loopStart` / `loopEnd` (the playhead plays on to `end`, then wraps) and the timeline's

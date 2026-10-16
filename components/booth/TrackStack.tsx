@@ -162,7 +162,8 @@ function Row({ row, color, span }: { row: StackRow; color: string; span: number 
       color,
       drops: sectionsRef.current,
       cues: track.hotCues ?? [],
-      loop: snap?.loop && snap.loop.deck === deck ? snap.loop : null,
+      loops: (snap?.loops ?? useSession.getState().status.loops).filter((l) => l.deck === deck),
+      saved: track.savedLoops ?? [],
       mark:
         role === "live" && snap?.mixOutPosition != null
           ? { at: snap.mixOutPosition, label: "MIX" }
@@ -230,7 +231,10 @@ interface DrawOptions {
   drops: { start: number; end: number }[];
   cues: (number | null)[];
   mark: { at: number; label: string } | null;
-  loop: { start: number; end: number } | null;
+  /** Loops playing (shaded) or armed (shaded, dashed edges) on this deck. */
+  loops: { start: number; end: number; armed: boolean }[];
+  /** The song's saved loops (outlined). */
+  saved: { start: number; end: number }[];
 }
 
 /** One frame of a row: waveform, drops, beat grid, cue pads, the mix / start point and the playhead. */
@@ -331,18 +335,36 @@ function draw(g: CanvasRenderingContext2D, W: number, H: number, o: DrawOptions)
     }
   }
 
-  // A beat loop: shaded, with its edges.
-  if (o.loop) {
-    const x0 = xOf(o.loop.start);
-    const x1 = xOf(o.loop.end);
+  // Saved loops: outlined. Loops playing: shaded with solid edges; armed: shaded with dashed edges.
+  g.strokeStyle = "rgba(251,191,36,0.55)";
+  g.lineWidth = dpr;
+  g.setLineDash([4 * dpr, 3 * dpr]);
+  for (const l of o.saved) {
+    const x0 = xOf(l.start);
+    const x1 = xOf(l.end);
+    if (x1 > 0 && x0 < W) g.strokeRect(x0, 1.5 * dpr, x1 - x0, H - 3 * dpr);
+  }
+  g.setLineDash([]);
+  for (const l of o.loops) {
+    const x0 = xOf(l.start);
+    const x1 = xOf(l.end);
+    if (x1 < 0 || x0 > W) continue;
     g.fillStyle = "#fbbf24";
-    g.globalAlpha = 0.18;
+    g.globalAlpha = 0.2;
     g.fillRect(x0, 0, x1 - x0, H);
     g.globalAlpha = 1;
-    g.fillRect(x0, 0, 2 * dpr, H);
-    g.fillRect(x1 - 2 * dpr, 0, 2 * dpr, H);
+    if (l.armed) g.setLineDash([5 * dpr, 4 * dpr]);
+    g.strokeStyle = "#fbbf24";
+    g.lineWidth = 2 * dpr;
+    g.beginPath();
+    g.moveTo(x0, 0);
+    g.lineTo(x0, H);
+    g.moveTo(x1, 0);
+    g.lineTo(x1, H);
+    g.stroke();
+    g.setLineDash([]);
     g.textBaseline = "top";
-    g.fillText("LOOP", x0 + 4 * dpr, 26 * dpr);
+    g.fillText(l.armed ? "LOOP ▶" : "LOOP", x0 + 4 * dpr, 26 * dpr);
   }
 
   // The playhead.
