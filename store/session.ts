@@ -23,7 +23,8 @@ interface SessionState {
   resumeAvailable: boolean;
 
   hydrate: () => Promise<void>;
-  play: () => Promise<void>;
+  /** Start the set. `firstDeck`: ▶ on a loaded deck — its song plays first, on that deck (default Deck A's). */
+  play: (firstDeck?: number) => Promise<void>;
   /** After a crash/reboot, try to resume without a click (works in kiosk mode). */
   tryAutoResume: () => Promise<void>;
   stop: () => Promise<void>;
@@ -32,8 +33,6 @@ interface SessionState {
   drop: () => void;
   /** Booth "Start from": where the cued song comes in. */
   setEntry: (choice: EntryChoice) => void;
-  /** Layer: the cued song (or `trackId`) plays over the current one until Drop swaps them. */
-  layer: (trackId?: string) => void;
   /** Songs loaded into decks before Play (index = deck). Deck A plays first, the others next in order. */
   preloads: (Preload | null)[];
   loadDeck: (deck: number, trackId: string) => void;
@@ -45,11 +44,13 @@ interface SessionState {
   scratchEnd: () => void;
   /** Master volume on the club speakers, 0..1 (saved in the settings). */
   setVolume: (volume: number) => void;
-  /** ⏸ on a deck: pause the song on air (silence until ▶), or stop one side of a mix. */
+  /** ⏸ on a deck: it stops where it is; nothing else changes. */
   pauseDeck: (deck: number) => void;
-  /** ▶ on a deck: resume the paused song, or bring the cued one in now. */
+  /** ▶ on a deck: it plays from where it stands (the cued song: together with the song on air). */
   playDeck: (deck: number) => void;
-  /** A hand on the jog wheel of the song on air: it stops like a record (playing or paused). */
+  /** CUE pressed (`down`) or let go on a deck, like a CDJ's. */
+  cueDeck: (deck: number, down: boolean) => void;
+  /** A hand on the jog wheel of a playing or stopped song: it stops like a record. */
   grabDeck: (deck: number) => void;
   /** The hand lets go at `position`: a held song plays on from there, a paused one waits there for ▶. */
   releaseDeck: (deck: number, position: number) => void;
@@ -140,8 +141,12 @@ const idle = (mood: MoodId, deckCount: number): AutoDJStatus => ({
   error: null,
   deckCount,
   paused: null,
-  holding: false,
+  holding: null,
+  pausedAlong: null,
+  silent: false,
   loops: [],
+  cuePoints: [],
+  cueHeld: null,
   auto: true,
 });
 
@@ -171,7 +176,7 @@ export const useSession = create<SessionState>((set, get) => ({
     set({ status: { ...get().status, mood: last.mood, queue: dj ? get().status.queue : queue }, resumeAvailable: last.playing });
   },
 
-  async play() {
+  async play(firstDeck) {
     if (get().starting || get().stopping || get().status.playing) return;
     set({ starting: true, resumeAvailable: false });
     // A cue on a loaded deck ends when the set starts (that song is about to play on the club speakers).
@@ -187,9 +192,14 @@ export const useSession = create<SessionState>((set, get) => ({
       dj.setMood(get().status.mood);
       // Requests made before the first Play.
       for (const t of get().status.queue) dj.request(t, false);
-      // Decks loaded before Play: Deck A first, then the others in deck order.
+      // Decks loaded before Play: Deck A first (or the deck staff pressed ▶ on), then the others in deck order.
       const loaded = get().preloads.slice(0, deckCount);
-      const preset = { first: loaded[0] ?? undefined, next: loaded.slice(1).filter((p): p is Preload => !!p) };
+      const lead = firstDeck !== undefined && loaded[firstDeck] ? firstDeck : 0;
+      const preset = {
+        first: loaded[lead] ?? undefined,
+        firstDeck: lead,
+        next: loaded.filter((p, i): p is Preload => !!p && i !== lead),
+      };
       await dj.start(preset);
       if (dj.isPlaying) set({ preloads: [] });
       persist(get().status.mood, dj.isPlaying, get().status.queue);
@@ -246,21 +256,27 @@ export const useSession = create<SessionState>((set, get) => ({
     if (dj.playDeck(deck) && wasPaused) persist(get().status.mood, true, get().status.queue);
   },
 
+  cueDeck(deck, down) {
+    if (!dj || (down && get().stopping)) return;
+    dj.cue(deck, down);
+  },
+
   grabDeck(deck) {
     if (!dj || get().stopping) return;
-    // Already paused: the wheel just moves the paused spot.
-    if (get().status.paused === null) dj.pauseDeck(deck, true);
+    // Already stopped: the wheel just moves the spot.
+    const st = get().status;
+    if (st.paused !== deck && st.pausedAlong !== deck) dj.pauseDeck(deck, true);
   },
 
   releaseDeck(deck, position) {
     if (!dj) return;
-    dj.movePaused(position);
-    if (get().status.holding) dj.playDeck(deck, 0.012);
+    dj.movePaused(deck, position);
+    if (get().status.holding === deck) dj.playDeck(deck, 0.012);
   },
 
   spinBack(deck, position) {
     if (!dj) return;
-    if (!get().status.holding || !dj.spinBack()) get().releaseDeck(deck, position);
+    if (get().status.holding !== deck || !dj.spinBack()) get().releaseDeck(deck, position);
   },
 
   setDeckTempo(deck, rate) {
@@ -318,11 +334,6 @@ export const useSession = create<SessionState>((set, get) => ({
 
   setEntry(choice) {
     dj?.setEntry(choice);
-  },
-
-  layer(trackId) {
-    const track = trackId ? useLibrary.getState().tracks[trackId] : undefined;
-    dj?.layer(track);
   },
 
   loadDeck(deck, trackId) {

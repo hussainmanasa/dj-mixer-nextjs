@@ -44,7 +44,12 @@ export function VolumeSlider({
         className="h-10 w-full cursor-pointer"
         style={color ? { accentColor: color } : undefined}
       />
-      {warning && percent === 0 && <p className="text-center text-sm text-warn">{warning}</p>}
+      {/* Its space is kept, so nothing moves when it shows. */}
+      {warning !== undefined && (
+        <p className="min-h-[1.25rem] text-center text-sm text-warn" style={{ visibility: percent === 0 && warning ? "visible" : "hidden" }}>
+          {warning || " "}
+        </p>
+      )}
     </div>
   );
 }

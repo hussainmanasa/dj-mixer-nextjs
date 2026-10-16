@@ -41,6 +41,8 @@ export class Deck {
   private sourceGain: GainNode | null = null;
   /** Before a scheduled jump: the source playing the part up to the jump (e.g. a dialogue). */
   private preJump: AudioBufferSourceNode | null = null;
+  /** The gain `preJump` plays through (faded out across the jump). */
+  private preGain: GainNode | null = null;
   /** A scheduled rewind (spinback). */
   private rewindSrc: AudioBufferSourceNode | null = null;
   track: Track | null = null;
@@ -177,6 +179,7 @@ export class Deck {
       pre.stop(jump.at + JUMP_XFADE);
       pre.onended = () => preGain.disconnect();
       this.preJump = pre;
+      this.preGain = preGain;
       // From the jump: the rest of the track, faded in across the cut.
       const mainGain = new GainNode(this.ctx, { gain: 0 });
       mainGain.gain.setValueAtTime(0, jump.at - JUMP_XFADE / 2);
@@ -207,10 +210,12 @@ export class Deck {
   /**
    * Hot cue: while playing, jump to track position `to` at context time `at`
    * (on a beat), crossfading 10 ms on the audio clock. The tempo holds across
-   * the jump; a glide still under way carries on after it. False while a jump
-   * (a dialogue) is still to come.
+   * the jump; a glide still under way carries on after it. A jump still to come
+   * (a dialogue) is called off first.
    */
   jumpAt(at: number, to: number): boolean {
+    // A dialogue still playing: its jump is called off (the timeline holds one jump).
+    if (this.pendingJump() !== null) this.cancelJump();
     const src = this.source;
     const gain = this.sourceGain;
     const tl = this.timeline;
@@ -220,6 +225,7 @@ export class Deck {
     if (!src || !gain || !tl || !buffer || at <= now || (tl.jump && tl.jump.at > now)) return false;
     // A dialogue's jump that has happened left its first part stopped: nothing to keep.
     this.preJump = null;
+    this.preGain = null;
     const glide = tl.ramp && tl.ramp.t1 > now ? tl.ramp : null;
     src.playbackRate.cancelAndHoldAtTime(now);
     this.pitch?.cancelAndHoldAtTime(now);
@@ -245,17 +251,62 @@ export class Deck {
   }
 
   /**
+   * Call off a jump still to come (a dialogue's cut to the drop): the song plays
+   * straight on from where it is — staff looped it, jumped it or moved it. The
+   * part before the jump becomes the playing source. False if none is pending.
+   */
+  cancelJump(): boolean {
+    const tl = this.timeline;
+    const pre = this.preJump;
+    const preGain = this.preGain;
+    const src = this.source;
+    const now = this.ctx.currentTime;
+    if (!tl?.jump || tl.jump.at <= now + 0.02 || !pre || !preGain || !src) return false;
+    // The part from the jump hasn't started yet: it never will.
+    src.onended = null;
+    try {
+      src.stop();
+    } catch {
+      /* already stopped */
+    }
+    src.disconnect();
+    this.sourceGain?.disconnect();
+    // Its fade and stop at the jump are taken back (the last stop() call wins).
+    preGain.gain.cancelScheduledValues(now);
+    preGain.gain.setValueAtTime(1, now);
+    pre.stop(now + 86_400);
+    pre.onended = null;
+    const glide = tl.ramp && tl.ramp.t1 > now ? tl.ramp : null;
+    if (glide) {
+      pre.playbackRate.cancelAndHoldAtTime(now);
+      this.pitch?.cancelAndHoldAtTime(now);
+    }
+    const next = new PlaybackTimeline(now, tl.positionAt(now), tl.rateAt(now));
+    next.loop = tl.loop;
+    this.source = pre;
+    this.sourceGain = preGain;
+    this.preJump = null;
+    this.preGain = null;
+    this.watchEnd(pre);
+    this.timeline = next;
+    if (glide) this.rampRate(now, glide.t1, glide.r1);
+    return true;
+  }
+
+  /**
    * Beat loop: from now the source loops between track positions `start` and
    * `end` (the playhead must be at or after `start` and before `end`: it plays
    * on to `end`, then wraps). Calling it again resizes the loop. A tempo glide
-   * under way stops at its current rate. False while a dialogue's jump is still to come.
+   * under way stops at its current rate. A dialogue's jump still to come is called off.
    */
   setLoop(start: number, end: number): boolean {
+    if (this.pendingJump() !== null) this.cancelJump();
     const src = this.source;
     const tl = this.timeline;
     const now = this.ctx.currentTime;
     if (!src || !tl || end <= start || (tl.jump && tl.jump.at > now)) return false;
     this.preJump = null;
+    this.preGain = null;
     if (tl.ramp && tl.ramp.t1 > now) {
       src.playbackRate.cancelAndHoldAtTime(now);
       this.pitch?.cancelAndHoldAtTime(now);
@@ -339,6 +390,8 @@ export class Deck {
       this.preJump.disconnect();
       this.preJump = null;
     }
+    this.preGain?.disconnect();
+    this.preGain = null;
     if (this.source) {
       this.stopping = true;
       try {

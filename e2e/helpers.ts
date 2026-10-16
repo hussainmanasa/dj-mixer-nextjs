@@ -17,9 +17,13 @@ export async function startBooth(page: Page, mood = "Peak Hour"): Promise<void> 
   // By role: visited pages stay mounted but hidden, and text like "Groove" also matches track names there.
   await page.getByRole("button", { name: new RegExp(`^${mood}`) }).click();
   await page.locator("button[aria-busy]").click();
-  await page.waitForFunction(() => /Beat-matched blend|Filter sweep|Echo-out|Cut on|Drop\b/.test(document.body.textContent ?? ""), null, {
-    timeout: 30_000,
-  });
+  // Until the next song is planned: a deck shows it coming in.
+  await page.waitForFunction(
+    () => [...document.querySelectorAll('section[aria-label^="Deck"]')].some((d) => /Cued|Mixing in|Playing along/.test(d.textContent ?? "")),
+    null,
+    { timeout: 30_000 },
+  );
+
 }
 
 export const dropButton = (page: Page) => page.locator('button[title="Bring the next track in on its drop"]');

@@ -76,7 +76,7 @@ test("cue pads: save the spot, jump back to it on the beat, clear it; on the cue
   expect(errors).toEqual([]);
 });
 
-test("while paused the jog wheel is silent: it moves the spot without a scratch", async ({ page }) => {
+test("while paused the jog wheel scratches on the club speakers and moves the spot; the song stays paused", async ({ page }) => {
   const taps = await tapAudio(page);
   await loadLibrary(page);
   await startBooth(page, "Groove");
@@ -100,11 +100,18 @@ test("while paused the jog wheel is silent: it moves the spot without a scratch"
     await page.mouse.move(cx + r * Math.sin(t), cy - r * Math.cos(t));
     await page.waitForTimeout(25);
   }
+  // The scratch is heard (on the mix's engine, so on the club speakers) while turning.
+  const turning = await taps.get();
+  expect(turning.scrubMessages.length).toBeGreaterThan(messages);
+  expect(turning.scrubPeak).toBeGreaterThan(0.01);
+  expect(turning.scrubHint).toBe("playback");
   await page.mouse.up();
   await page.waitForTimeout(300);
   expect(await playedA(page)).toBeGreaterThanOrEqual(before + 3);
-  const t = await taps.get();
-  expect(t.scrubMessages.length).toBe(messages);
-  expect(t.pre).toBeLessThan(0.001);
+  // Let go: the scratch dies away and the song stays paused, silent.
+  await page.waitForTimeout(500);
+  await taps.reset();
+  await page.waitForTimeout(1000);
+  expect((await taps.get()).pre).toBeLessThan(0.001);
   expect(await states(page)).toMatch(/A:Paused/);
 });

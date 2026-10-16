@@ -32,8 +32,8 @@ test("pause the song on air: silence, no recovery, then resume from the same spo
   expect(await states(page)).toMatch(/A:Paused.*B:Cued/);
   expect(played(await deckA(page))).toBe(at);
 
-  // ▶ Resume: the same song carries on from where it stopped.
-  await deck(page, "A").getByRole("button", { name: "Resume Deck A" }).click();
+  // ▶ Play: the same song carries on from where it stopped.
+  await deck(page, "A").getByRole("button", { name: "Play Deck A" }).click();
   await expect.poll(() => states(page)).toMatch(/A:On air/);
   await expect(page.getByRole("status").filter({ hasText: "Paused" })).toHaveCount(0);
   await taps.reset();
@@ -42,54 +42,65 @@ test("pause the song on air: silence, no recovery, then resume from the same spo
   const resumed = played(await deckA(page));
   expect(resumed).toBeGreaterThanOrEqual(at);
   expect(resumed).toBeLessThanOrEqual(at + 3);
-  // The auto-DJ plans the next mix again.
-  await expect(page.getByText(/Beat-matched blend|Filter sweep|Echo-out|Cut on|Drop\b/).first()).toBeVisible();
+  // The cued song comes in again — after this song: staff paused it, so the auto-DJ doesn't mix out of it.
+  await expect(page.getByText("After this song")).toBeVisible();
 
-  // Paused again, ▶ Play now on the cued deck starts that song at once; the paused one is done.
+  // Paused again, ▶ Play on the cued deck plays that song at once — the paused one stays on Deck A, paused.
   await deck(page, "A").getByRole("button", { name: "Pause Deck A" }).click();
   await expect.poll(() => states(page)).toMatch(/A:Paused/);
-  const cued = (await deckStates(page)).find((d) => d.startsWith("B:"))!.split(" ").at(-1);
-  await deck(page, "B").getByRole("button", { name: "Play Deck B now" }).click();
-  await expect.poll(() => states(page)).toMatch(new RegExp(`B:On air .*${cued}`));
+  const onA = (await deckStates(page)).find((d) => d.startsWith("A:"))!.split(" ").at(-1);
+  await deck(page, "B").getByRole("button", { name: "Play Deck B" }).click();
+  await expect.poll(() => states(page), { timeout: 3000 }).toMatch(new RegExp(`A:Paused .*${onA}.*B:Playing along`));
   await expect(page.getByRole("status").filter({ hasText: "Paused" })).toHaveCount(0);
   await taps.reset();
   await page.waitForTimeout(1500);
   expect((await taps.get()).pre).toBeGreaterThan(0.05);
-  // And a new song gets cued on the free deck.
-  await expect.poll(() => states(page), { timeout: 15_000 }).toMatch(/A:Cued/);
+  // Nothing changes by itself while Deck A is paused; Drop mixes: B takes over.
+  await page.waitForTimeout(3000);
+  expect(await states(page)).toMatch(new RegExp(`A:Paused .*${onA}.*B:Playing along`));
+  await dropButton(page).click();
+  await expect.poll(() => states(page), { timeout: 20_000 }).toMatch(/B:On air/);
 });
 
-test("▶ on the cued deck mixes it in now; ⏸ during a mix stops that side and the other song carries on", async ({ page }) => {
+test("both decks play: ▶ on the cued deck plays it at once; ⏸ on either deck pauses just that deck and changes nothing else", async ({ page }) => {
   const taps = await tapAudio(page);
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await loadLibrary(page);
   await startBooth(page, "Groove");
   await expect.poll(() => states(page), { timeout: 30_000 }).toMatch(/A:On air.*B:Cued/);
+  const songA = (await deckStates(page)).find((d) => d.startsWith("A:"))!.split(" ").at(-1);
+  const songB = (await deckStates(page)).find((d) => d.startsWith("B:"))!.split(" ").at(-1);
 
-  // ▶ Play now on the cued deck: it comes in on the next phrase instead of at the planned mix point.
-  await deck(page, "B").getByRole("button", { name: "Play Deck B now" }).click();
-  await expect.poll(() => states(page), { timeout: 15_000 }).toMatch(/B:Playing along/);
+  // ▶ Play: Deck B plays at once (on the next beat), together with Deck A.
+  await deck(page, "B").getByRole("button", { name: "Play Deck B" }).click();
+  await expect.poll(() => states(page), { timeout: 3000 }).toMatch(/A:On air.*B:Playing along/);
 
-  // ⏸ on the incoming deck mid-mix: it stops, Deck A carries on alone at full level.
+  // ⏸ Deck B: it stops where it is; Deck A plays on; nothing swaps.
   await deck(page, "B").getByRole("button", { name: "Pause Deck B" }).click();
-  await expect.poll(() => states(page)).toMatch(/A:On air.*B:Cued/);
-  await expect(page.getByText(/paused — it comes in near the end of this song/)).toBeVisible();
+  await expect.poll(() => states(page)).toMatch(new RegExp(`A:On air .*${songA}.*B:Paused .*${songB}`));
   await taps.reset();
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(4000);
   expect((await taps.get()).pre).toBeGreaterThan(0.05);
+  expect(await states(page)).toMatch(new RegExp(`A:On air .*${songA}.*B:Paused .*${songB}`));
 
-  // Bring it in again, then ⏸ on the outgoing deck mid-mix: Deck B carries on alone.
-  await deck(page, "B").getByRole("button", { name: "Play Deck B now" }).click();
-  await expect.poll(() => states(page), { timeout: 15_000 }).toMatch(/B:Playing along/);
-  const incoming = (await deckStates(page)).find((d) => d.startsWith("B:"))!.split(" ").at(-1);
+  // ▶ Play Deck B: back in, in time with Deck A.
+  await deck(page, "B").getByRole("button", { name: "Play Deck B" }).click();
+  await expect.poll(() => states(page), { timeout: 3000 }).toMatch(/A:On air.*B:Playing along/);
+
+  // ⏸ Deck A: it stops where it is; Deck B plays on; Deck A keeps its song.
   await deck(page, "A").getByRole("button", { name: "Pause Deck A" }).click();
-  await expect.poll(() => states(page), { timeout: 5000 }).toMatch(new RegExp(`B:On air .*${incoming}`));
-  await expect(page.getByText(/stopped — .* carries on/)).toBeVisible();
+  await expect.poll(() => states(page)).toMatch(new RegExp(`A:Paused .*${songA}.*B:Playing along .*${songB}`));
   await taps.reset();
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(4000);
   expect((await taps.get()).pre).toBeGreaterThan(0.05);
-  // The auto-DJ carries on: the next song is cued on Deck A.
+  expect(await states(page)).toMatch(new RegExp(`A:Paused .*${songA}.*B:Playing along .*${songB}`));
+
+  // ▶ Play Deck A: both play again. Drop mixes: B takes over.
+  await deck(page, "A").getByRole("button", { name: "Play Deck A" }).click();
+  await expect.poll(() => states(page), { timeout: 3000 }).toMatch(/A:On air.*B:Playing along/);
+  await dropButton(page).click();
+  await expect.poll(() => states(page), { timeout: 20_000 }).toMatch(/B:On air/);
   await expect.poll(() => states(page), { timeout: 15_000 }).toMatch(/A:Cued/);
   expect(errors).toEqual([]);
 });

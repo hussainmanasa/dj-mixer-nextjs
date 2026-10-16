@@ -87,12 +87,12 @@ test("a loop on the cued deck: armed before it plays, it loops while playing tog
   await startBooth(page, "Groove");
   await expect.poll(() => states(page), { timeout: 30_000 }).toMatch(/A:On air.*B:Cued/);
 
-  // Arm an 8-beat loop on the cued song, then ▶ Play now: it comes in looping.
+  // Arm an 8-beat loop on the cued song, then ▶ Play: it comes in looping.
   const loopB = page.getByRole("button", { name: "Loop 8 beats, Deck B" });
   await loopB.click();
   await expect(loopB).toHaveAttribute("aria-pressed", "true");
   await expect(deck(page, "B").getByRole("button", { name: "Don't loop" })).toBeVisible();
-  await deck(page, "B").getByRole("button", { name: "Play Deck B now" }).click();
+  await deck(page, "B").getByRole("button", { name: "Play Deck B" }).click();
   await expect.poll(() => states(page), { timeout: 15_000 }).toMatch(/A:On air.*B:Playing along/);
   await expect(deck(page, "B").getByRole("button", { name: "Exit loop" })).toBeVisible();
   // It keeps looping (8 beats ≈ 3.8 s): its time stays put, and nothing mixes on its own.

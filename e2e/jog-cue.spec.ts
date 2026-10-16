@@ -30,8 +30,8 @@ test("a cue on the cued deck stops when its mix starts", async ({ page }) => {
   await expect.poll(async () => (await deckStates(page)).join(" "), { timeout: 30_000 }).toMatch(/B:Cued/);
 
   // With a separate preview output, the cued deck can be cued during the set.
-  await deck(page, "B").getByRole("button", { name: "🎧 Cue" }).click();
-  await expect(deck(page, "B").getByRole("button", { name: "■ Stop cue" })).toBeVisible();
+  await deck(page, "B").getByRole("button", { name: "🎧 Listen" }).click();
+  await expect(deck(page, "B").getByRole("button", { name: "■ Stop listening" })).toBeVisible();
   await expect(deck(page, "B")).toContainText(/cue \d+:\d\d\.\d/);
 
   // Its mix starts: the cue stops by itself.
@@ -56,7 +56,7 @@ test("the jog wheel sets a loaded deck's start: keys, drag and scroll", async ({
   await jog.press("Shift+ArrowRight");
   await expect(chip()).toHaveText("Bar 3.1");
 
-  // Drag a quarter turn clockwise (top → right) = 4 beats = one more bar.
+  // Drag a quarter turn clockwise (top → right): like vinyl, about 0.45 s of audio = one beat at 127 BPM.
   const box = (await jog.boundingBox())!;
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;
@@ -68,12 +68,12 @@ test("the jog wheel sets a loaded deck's start: keys, drag and scroll", async ({
     await page.mouse.move(cx + r * Math.sin(t), cy - r * Math.cos(t));
   }
   await page.mouse.up();
-  await expect(chip()).toHaveText("Bar 4.1");
+  await expect(chip()).toHaveText("Bar 3.2");
 
   // Scroll over it: one beat per notch. Home: back to the beginning.
   await page.mouse.move(cx, cy);
   await page.mouse.wheel(0, 100);
-  await expect(chip()).toHaveText("Bar 4.2");
+  await expect(chip()).toHaveText("Bar 3.3");
   await jog.press("Home");
   await expect(chip()).toHaveText("Bar 1.1");
   await page.screenshot({ path: "test-results/jog.png" });
@@ -113,23 +113,23 @@ test("the jog wheel scratches on the club speakers; a playing cue resumes from t
   const chip = () => deck(page, "A").getByText(/^Bar \d+\.\d$/);
 
   // Cue it (headphones), then drag the wheel: the cue pauses and the scratch plays on the mix's engine.
-  await deck(page, "A").getByRole("button", { name: "🎧 Cue" }).click();
-  await expect(deck(page, "A").getByRole("button", { name: "■ Stop cue" })).toBeVisible();
+  await deck(page, "A").getByRole("button", { name: "🎧 Listen" }).click();
+  await expect(deck(page, "A").getByRole("button", { name: "■ Stop listening" })).toBeVisible();
   await dragQuarterTurn(page, jog, false);
-  await expect(deck(page, "A").getByRole("button", { name: "🎧 Cue" })).toBeVisible();
+  await expect(deck(page, "A").getByRole("button", { name: "🎧 Listen" })).toBeVisible();
   await expect.poll(async () => (await taps.get()).scrubPeak).toBeGreaterThan(0.01);
   expect((await taps.get()).scrubHint).toBe("playback");
   // It reaches the speakers through the limiter and master volume.
   expect((await taps.get()).post).toBeGreaterThan(0.01);
   await page.mouse.up();
-  await expect(chip()).toHaveText("Bar 2.1");
+  await expect(chip()).toHaveText("Bar 1.2");
   // Let go: the scratch ends and the cue carries on from the new start.
-  await expect(deck(page, "A").getByRole("button", { name: "■ Stop cue" })).toBeVisible({ timeout: 5000 });
+  await expect(deck(page, "A").getByRole("button", { name: "■ Stop listening" })).toBeVisible({ timeout: 5000 });
   await expect(deck(page, "A")).toContainText(/cue \d+:\d\d\.\d/);
   expect((await taps.get()).scrubMessages).toEqual(expect.arrayContaining(["window", "target", "end"]));
 
   // A key step plays a short blip from the new position.
-  await deck(page, "A").getByRole("button", { name: "■ Stop cue" }).click();
+  await deck(page, "A").getByRole("button", { name: "■ Stop listening" }).click();
   await jog.focus();
   await jog.press("ArrowRight");
   await expect.poll(async () => (await taps.get()).scrubMessages.includes("play")).toBe(true);
@@ -157,8 +157,8 @@ test("separate volumes for the club speakers and the headphones; the club one ne
   await deck(page, "A").getByRole("button", { name: "Load track" }).click();
   await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove C" }).getByRole("button").last().click();
   await phones.fill("50");
-  await deck(page, "A").getByRole("button", { name: "🎧 Cue" }).click();
-  await expect(deck(page, "A").getByRole("button", { name: "■ Stop cue" })).toBeVisible();
+  await deck(page, "A").getByRole("button", { name: "🎧 Listen" }).click();
+  await expect(deck(page, "A").getByRole("button", { name: "■ Stop listening" })).toBeVisible();
   await page.waitForTimeout(300);
   await taps.reset();
   await page.waitForTimeout(1500);
@@ -173,7 +173,7 @@ test("separate volumes for the club speakers and the headphones; the club one ne
   const phonesMuted = await taps.get();
   expect(phonesMuted.previewPre).toBeGreaterThan(0.05);
   expect(phonesMuted.previewPost).toBeLessThan(0.001);
-  await deck(page, "A").getByRole("button", { name: "■ Stop cue" }).click();
+  await deck(page, "A").getByRole("button", { name: "■ Stop listening" }).click();
 
   // Club speakers: the headphones' volume doesn't touch the mix.
   await page.locator("button[aria-busy]").click();

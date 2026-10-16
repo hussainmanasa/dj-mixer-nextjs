@@ -116,7 +116,7 @@ export function Guide() {
               <B>Standby</B> (spare song), <B>Loaded</B> (before Play) or <B>Empty</B>.
             </li>
             <li>
-              In the middle: <B>Play / Stop</B>, <B>Drop</B>, <B>Layer</B>, the <B>Effects</B> pad, the level meter, <B>Volume</B>, the bar &amp;
+              In the middle: <B>Play / Stop</B>, the <B>AI DJ</B> switch, <B>Drop</B>, the <B>Effects</B> pad, the level meter, <B>Volume</B>, the bar &amp;
               phrase counter, <B>Up next</B> (which song, how it mixes, and when) and the request <B>Queue</B>.
             </li>
             <li>The background pulses with the beat in the mood&apos;s colour.</li>
@@ -186,20 +186,20 @@ export function Guide() {
 
         <Section id="ai-dj" title="AI DJ on / off">
           <p>
-            The <B>AI DJ</B> switch under Play / Stop (during a set) decides who mixes. <B>On</B> (normal): the auto-DJ mixes every song in
-            by itself. <B>Off</B>: it still picks the best next song and cues it, but it doesn&apos;t mix by itself — Up next says{" "}
-            <B>waits for Drop</B>, and you bring it in with <B>Drop</B> (or <B>▶ Play now</B>), still beat-matched for you.
-          </p>
-          <p>
-            If nobody mixes and the song nears its end, the AI DJ brings the cued song in by itself and switches back <B>on</B> (&quot;AI DJ is
-            back on&quot;), so the music never stops. Switching it on again at any time hands the mixing back.
+            The <B>AI DJ</B> switch under Play / Stop (during a set) decides who mixes. <B>On</B> (normal): the auto-DJ mixes songs in by
+            itself — but only songs you leave alone. Once you play, pause or cue a song yourself (▶, ⏸, CUE, or a hand on its wheel), it
+            never mixes that song in or out: it plays to its end and the next song starts then. <B>Off</B>: no automatic mixing at all —
+            each song plays to its very end, and the cued song (still the best fit, which you can change) starts the moment it ends, with
+            no blend and nothing overlapping. Up next says <B>After this song</B>. You can still mix by hand with <B>Drop</B> or <B>▶</B>.
+            It stays off until you switch it on again.
           </p>
         </Section>
 
         <Section id="load" title="Loading decks before Play">
           <p>
             Before pressing Play you can choose the first songs yourself: <B>Load track</B> on a deck, pick a song. Deck A plays first, then
-            B, C, D in order; after them the auto-DJ carries on. <B>Change</B> or <B>Eject</B> to undo.
+            B, C, D in order; after them the auto-DJ carries on. Or press <B>▶ Play</B> on a loaded deck: the set starts with that
+            deck&apos;s song, on that deck. <B>Change</B> or <B>Eject</B> to undo.
           </p>
           <p>
             <B>Start from</B> chooses where a song comes in: <B>Auto</B> (the auto-DJ decides), <B>Beginning</B>, <B>Dialogue</B> or{" "}
@@ -213,11 +213,7 @@ export function Guide() {
             items={[
               [
                 "Drop",
-                "Brings the next song in on its drop, on the next 4-bar phrase (about 6–13 s), with a build-up and a riser. Greyed out while a mix is already running.",
-              ],
-              [
-                "Layer…",
-                "Plays the next song over the current one (its bass off) until you press Drop, which swaps them. Only for songs that match in tempo and key; otherwise it offers the songs that do.",
+                "Brings the next song in on its drop, on the next 4-bar phrase (about 6–13 s), with a build-up and a riser. With both decks playing (▶ on the cued deck), Drop swaps them on the next phrase — also when one of them is paused. Greyed out while a mix is already running, and when nothing is playing.",
               ],
               [
                 "Effects",
@@ -235,24 +231,39 @@ export function Guide() {
         </Section>
 
         <Section id="decks" title="Deck controls">
+          <p>
+            Every deck is a plain player: <B>CUE</B>, <B>▶ Play / ⏸ Pause</B>, loops, cue pads, tempo, Sync and the jog wheel work on any
+            deck that has a song, at any time — AI DJ on or off, and also while the auto-DJ is in the middle of a mix (it then lets go,
+            and the two songs play on side by side).
+          </p>
           <Dl
             items={[
               [
-                "⏸ Pause (song on air)",
-                "The song fades out instantly and the club hears nothing until you press ▶ Resume — for an announcement, a speech or the cake. A yellow Paused banner shows the whole time. Nothing restarts by itself.",
-              ],
-              ["▶ Resume", "Carries on from exactly where it stopped, at the same tempo, and the auto-DJ plans the next mix again."],
-              [
-                "▶ Play now (cued deck)",
-                "Starts the cued song on the next phrase, beat-matched, playing together with the song on air (its bass stays off so the two basslines don't clash). Nothing mixes out until the new song reaches its drop — then they swap — or you press Drop. Songs too far apart in tempo to play in time get mixed in instead, and a song set to start from its drop swaps straight in. While the set is paused, ▶ Play now starts that song at once instead of resuming the old one.",
+                "▶ Play / ⏸ Pause",
+                "One button. ⏸ stops the deck where it is; nothing else changes. With nothing else playing the club hears nothing until you press ▶ — for an announcement, a speech or the cake — and a yellow Paused banner shows. ▶ plays it from where it stands: with the other deck playing, in time with it (on its next beat) when their tempos allow, else straight away.",
               ],
               [
-                "⏸ during a mix",
-                "Stops just that deck; the other song carries on at full level. Pause the song going out and the new one takes over; pause the song coming in and it comes back near the end of the current song (or press ▶ Play now).",
+                "▶ on the cued deck",
+                "Plays the cued song at once, at full level, so both decks play together — beat-matched on the song on air's next beat when their tempos allow, else right away at its own tempo. Nothing mixes or swaps by itself: both play until you press Drop (which mixes them) or a song reaches its end. If the song on air is paused, the cued song plays on its own.",
+              ],
+              [
+                "CUE",
+                "Works like a CDJ's. While the deck plays: back to the cue point, stopped there. Stopped somewhere else (paused, or moved with the wheel or a cue pad): that spot becomes the cue point. Stopped at the cue point: it plays from there while you hold CUE and goes back when you let go — press ▶ while holding and it keeps playing. A song's cue point starts where it began playing; on the cued deck it is the start point, so holding CUE plays the cued song from there on the speakers.",
+              ],
+              [
+                "🎧 Listen",
+                "Plays the cued (or loaded) song on the headphones only — the club hears nothing. Set start here makes the spot you're hearing the start point. Needs a separate preview output during a set (Library → Audio outputs).",
+              ],
+              [
+                "When a song ends",
+                "With the other deck playing, that one simply plays on. With nothing else playing, the other deck's song starts at once — from its cue point, or where it was paused — so the music never stops by itself.",
               ],
             ]}
           />
-          <Tip>While paused you can still change the mood, change the cued song or its Start from. Drop, Layer and effects wait until you resume.</Tip>
+          <Tip>
+            Every control stays in its place; the ones that don&apos;t apply right now (a deck with no song) are greyed out. While the set is
+            paused you can still change the mood, the cued song or its Start from; effects wait until something plays.
+          </Tip>
         </Section>
 
         <Section id="jog" title="The jog wheel">
@@ -261,11 +272,10 @@ export function Guide() {
             rows={[
               [
                 "Loaded or cued (not playing)",
-                "Sets where the song will start. 1 turn = 4 bars (hold Shift: 1 bar). You hear it scratch on the speakers (not while the set is paused).",
+                "Sets where the song will start. It turns like a record — one turn ≈ 1.8 s of the song (hold Shift: a quarter as far), the same feel and scratch sound as a playing song — and the start snaps to the beat when you let go. You hear it scratch on the speakers.",
               ],
-              ["On air, playing", "Touch it and the song stops under your hand like a record; turn to scratch; let go and it plays on from there."],
-              ["On air, paused", "Moves the spot ▶ Resume will play from, silently (the room stays quiet); it stays paused."],
-              ["Mixing", "No wheel — turning it would throw both songs out of time."],
+              ["Playing (on air, mixing in or playing along)", "Touch it and the song stops under your hand like a record; turn to scratch; let go and it plays on from there."],
+              ["Paused", "Moves the spot ▶ will play from — you hear it scratch on the speakers, like a record under your hand — and it stays paused. Press CUE there to make it the cue point."],
             ]}
           />
           <h3 className="mt-6 text-lg font-semibold">Spinback</h3>
@@ -308,7 +318,9 @@ export function Guide() {
               <B>Cued song:</B> the tempo it settles at after its mix — during the mix it is still beat-matched to the song on air.
             </li>
             <li>The slider moves by itself when the auto-DJ changes the tempo, so it always shows the real speed.</li>
-            <li>It is greyed out while that deck&apos;s mix is about to start or running.</li>
+            <li>
+              <B>During a mix</B> it works too: the deck goes to that tempo at once (the songs may drift apart — your choice).
+            </li>
           </ul>
           <p>
             <B>Sync</B> (under the slider) sets that deck to the other deck&apos;s BPM in one press: on the song on air, to the cued song&apos;s
@@ -330,27 +342,26 @@ export function Guide() {
                 "Saves the deck's spot, snapped to the nearest beat: where the song on air is now (or where it is paused), or a cued song's start point — or where its Cue is playing in your headphones.",
               ],
               [
-                "Set pad, song on air",
-                "Jumps there on the next beat, so the groove carries on in time; the auto-DJ re-times the next mix. While paused it moves the paused spot.",
+                "Set pad, playing song",
+                "Jumps there on the next beat, so the groove carries on in time; the auto-DJ re-times the next mix. While paused it moves the paused spot (CUE there makes it the cue point).",
               ],
               ["Set pad, loaded or cued deck", "Makes that spot the song's start point (it shows as a bar, e.g. \u201cBar 17.1\u201d)."],
               ["Clear", "Shift-click a pad, or press Clear then tap the pad."],
             ]}
           />
-          <Tip>The pads on the song on air wait while it mixes (jumping then would throw both songs out of time), and during its dialogue.</Tip>
+          <Tip>Pads work during a mix too, on either deck (the mix carries on), and during a dialogue (the song then plays on without jumping to its drop).</Tip>
         </Section>
 
         <Section id="loops" title="Loops">
           <p>
-            The song on air has <B>Loop</B> buttons: <B>¼, ½, 1, 2, 4, 8, 16 beats</B>. Press one and the song repeats that many beats,
+            Every deck has <B>Loop</B> buttons: <B>¼, ½, 1, 2, 4, 8, 16 beats</B>. Press one and the song repeats that many beats,
             starting on the beat it&apos;s in, so it stays in time. The lit button is the loop playing: press another length to change it, or
             press the lit one (or <B>Exit loop</B>) to let the song carry on from there.
           </p>
           <ul className="list-disc space-y-1.5 pl-5">
             <li>
-              <B>On the cued deck</B> too: before it plays, a loop is <B>armed</B> (dashed) from where the song will start — press{" "}
-              <B>▶ Play now</B> and it comes in looping its intro while the song on air plays on, for as long as you like. Press{" "}
-              <B>Drop</B> to let the loop go and mix. While it plays along you can also start or change a loop on it.
+              <B>On a stopped deck</B> (the cued song, or a paused one) a loop is <B>armed</B> (dashed) from where the song stands — press{" "}
+              <B>▶</B> and it comes in looping, for as long as you like. Press <B>Drop</B> to let the loop go and mix.
             </li>
             <li>
               <B>Saved loops</B> (L1–L4) appear as buttons under the loop lengths when the song has them. On the song on air, a saved loop
@@ -358,12 +369,11 @@ export function Guide() {
             </li>
             <li>The auto-DJ&apos;s next mix waits while the song on air loops (Up next says &quot;After the loop&quot;) and is planned again when it ends.</li>
             <li>
-              Pressing <B>Drop</B>, <B>▶ Play now</B> or a cue pad ends the loop — loop a few beats, then Drop is a classic build-up.
+              Pressing <B>Drop</B>, ⏸ or a cue pad ends the loop — loop a few beats, then Drop is a classic build-up.
             </li>
             <li>
-              The track view shades a loop that&apos;s playing (dashed edges: armed) and outlines the song&apos;s saved loops. Loops wait while the
-              song is mixing, paused or still in its dialogue. If the song on air nears its end while the cued song loops, they swap by
-              themselves so the music never gets stuck.
+              The track view shades a loop that&apos;s playing (dashed edges: armed) and outlines the song&apos;s saved loops. Loops work during
+              a mix too (the mix carries on) and during a dialogue (the song then plays on without jumping to its drop).
             </li>
           </ul>
         </Section>

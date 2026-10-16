@@ -15,7 +15,8 @@ import { DECK_LETTERS } from "./theme";
 
 export interface StackRow {
   deck: number;
-  track: Track;
+  /** null: nothing on this deck (the row stays, empty). */
+  track: Track | null;
   role: DeckRole;
   /** Where a loaded or cued song will start (track seconds). */
   startAt?: number;
@@ -34,7 +35,6 @@ const ZOOMS = [4, 8, 16, 32];
  */
 export function TrackStack({ rows, color }: { rows: StackRow[]; color: string }) {
   const [zoom, setZoom] = useState(1);
-  if (rows.length === 0) return null;
   return (
     <section aria-labelledby="track-view-heading" className="rounded-3xl border border-border bg-surface/80 p-4 backdrop-blur">
       <div className="mb-3 flex items-center justify-between">
@@ -53,7 +53,7 @@ export function TrackStack({ rows, color }: { rows: StackRow[]; color: string })
       </div>
       <div className="space-y-2">
         {rows.map((r) => (
-          <Row key={`${r.deck}:${r.track.id}`} row={r} color={color} span={ZOOMS[zoom]} />
+          <Row key={`${r.deck}:${r.track?.id ?? "empty"}`} row={r} color={color} span={ZOOMS[zoom]} />
         ))}
       </div>
     </section>
@@ -65,11 +65,12 @@ const ROLE_LABEL: Partial<Record<DeckRole, string>> = { live: "On air", incoming
 function Row({ row, color, span }: { row: StackRow; color: string; span: number }) {
   const { deck, role, startAt } = row;
   // The library's copy: cue pads change while the song plays.
-  const track = useLibrary((s) => s.tracks[row.track.id]) ?? row.track;
+  const track = useLibrary((s) => (row.track ? s.tracks[row.track.id] : undefined)) ?? row.track;
   const getFile = useLibrary((s) => s.getFile);
-  const a = track.analysis;
+  const a = track?.analysis ?? null;
   const [wave, setWave] = useState<Waveform | null>(null);
   useEffect(() => {
+    if (!row.track) return;
     let live = true;
     void waveformFor(row.track, getFile).then((w) => live && setWave(w));
     return () => {
@@ -110,7 +111,11 @@ function Row({ row, color, span }: { row: StackRow; color: string; span: number 
   useBoothFrame((snap) => {
     const el = canvas.current;
     const g2 = el?.getContext("2d");
-    if (!el || !g2 || !a) return;
+    if (!el || !g2) return;
+    if (!a || !track) {
+      g2.clearRect(0, 0, el.width, el.height);
+      return;
+    }
     const view = snap?.decks[deck] ?? null;
     const rate = view?.rate ?? 1;
     // Where the song is (a cued song before its start: where it would be, so it scrolls in).
@@ -181,12 +186,12 @@ function Row({ row, color, span }: { row: StackRow; color: string; span: number 
             {DECK_LETTERS[deck]}
           </span>
           <span ref={badge} className="text-[10px] font-bold uppercase tracking-wider text-muted">
-            {ROLE_LABEL[role]}
+            {track ? ROLE_LABEL[role] : "Empty"}
           </span>
-          <span className="ml-auto font-mono text-xs text-muted">{track.camelot ?? "key —"}</span>
+          <span className="ml-auto font-mono text-xs text-muted">{track?.camelot ?? "key —"}</span>
         </div>
-        <p className="mt-1 truncate font-semibold">{track.title}</p>
-        <p className="truncate text-xs text-muted">{track.artist || "Unknown artist"}</p>
+        <p className="mt-1 truncate font-semibold">{track?.title ?? "—"}</p>
+        <p className="truncate text-xs text-muted">{track ? track.artist || "Unknown artist" : "No song on this deck"}</p>
         <p className="mt-1 flex items-baseline gap-1.5 font-mono text-xs text-muted">
           <span ref={bpm} className="text-base font-bold text-foreground tabular-nums">
             {a?.bpm.toFixed(1) ?? "—"}

@@ -28,29 +28,35 @@ Open http://localhost:3000, then:
    Riser) fire on the next beat; **Change track** / **Add track** request music. The auto-DJ still
    beat-matches and mixes every request for the mood, and in moods with *Add effects on transitions* it fires
    effects itself as the music changes (the FX pad lights up, marked "auto").
-   **Layer** plays the next song over the current one (its bass off) until you press **Drop**, which swaps
-   them — only for songs that match in tempo and key.
-   **🎧 Cue** on a loaded or cued deck plays it in your headphones (the preview output); **Set start here** makes
+   **🎧 Listen** on a loaded or cued deck plays it in your headphones (the preview output); **Set start here** makes
    that its start. The picker's **▶** previews a song before you choose it. On a loaded or cued deck you can
    also turn the **jog wheel** (drag, scroll, or click it and use the arrow keys) to move its start point — it
    scratches on the club speakers as you turn it (during a set, over the music).
-   **⏸ / ▶ on each deck:** ⏸ on the song on air pauses it — the club hears nothing until you press **▶ Resume**,
-   which carries on from the same spot (or **▶ Play now** on the cued deck starts that song instead). During a
-   mix, ⏸ stops just that deck and the other song carries on. The **jog wheel on the song on air** works like a record:
-   touch it and the song stops under your hand, turn it to scratch, let go and it plays on from there. On a paused
-   song, turning it moves the spot ▶ will play from. (Not while two songs are mixing.) Flick the wheel **backwards fast** and let go
-   for a **spinback** (or swipe two fingers down fast on a trackpad, or twist two fingers back on a touchscreen):
-   the song spins back and the cued song drops in.
-   **Tempo slider** beside each playing / cued deck's wheel (±8%): on the song on air it changes the tempo at once
-   (the auto-DJ re-times the next mix); on the cued song it's the tempo it settles at after its mix. Double-click
-   it, or press its % button, to go back to the song's own tempo. **Sync** under it sets that deck to the other deck's BPM. **Cue pads A–H**
-   on each deck: an empty pad saves the spot, a set pad jumps there on the beat (on a cued deck it sets the start);
-   Shift-click or Clear empties one. **Loop** buttons (¼–16 beats) on the song on air repeat that many
-   beats on the beat until you press it again (the next mix waits); on the cued deck a loop is armed and the song
-   comes in looping when you press ▶ Play now, until Drop. **Saved loops** (L1–L4, made on the song's waveform in
-   the track editor) are one tap on the deck. The **AI DJ** switch under Play / Stop turns
-   automatic mixing off: the next song is still cued and waits for **Drop**; near the song's end the AI DJ takes over. The wheel's centre shows the song's cover art. ▶ **Play now** on the cued deck starts it playing
-   together with the song on air (beat-matched); they swap at the new song's drop, or when you press **Drop**. The auto-DJ keeps running throughout — no need to press Stop.
+   **Every deck is a plain player** — CUE, ▶ / ⏸, loops, cue pads, tempo and the jog wheel work on any deck with a
+   song, at any time, AI DJ on or off, also in the middle of the auto-DJ's own mix (it lets go and both songs play
+   on). **▶ Play / ⏸ Pause** is one button: ⏸ stops just that deck and nothing changes by itself; with nothing else
+   playing the club hears nothing until ▶. ▶ on the cued deck plays it at once, at full level, together with the
+   song on air (beat-matched when their tempos allow; on its own if the song on air is paused); nothing mixes or
+   swaps by itself — only **Drop** mixes them. Before the set, ▶ on a loaded deck starts the set with that song.
+   **CUE** works like a CDJ's: playing, it goes back to the cue point and stops; stopped elsewhere, that spot becomes
+   the cue point; at the cue point, it plays while held (▶ meanwhile keeps it playing). When a song ends with nothing
+   else playing, the other deck's song starts at once, so the music never stops by itself.
+   The **jog wheel** works like a record on every deck (one turn ≈ 1.8 s of the song): on the song on air touch it and
+   the song stops under your hand, turn it to scratch, let go and it plays on; on a paused song it moves the spot ▶
+   plays from — scratching on the club speakers either way. Flick it **backwards fast** and let go for a
+   **spinback** (or swipe two fingers down fast on a trackpad, or twist two fingers back on a touchscreen): the song
+   spins back and the cued song drops in. The wheel's centre shows the song's cover art.
+   **Tempo slider** beside each deck's wheel (±8%) changes that deck's tempo; double-click it, or press its %
+   button, for the song's own tempo. **Sync** under it sets that deck to the other deck's BPM. **Cue pads A–H**: an
+   empty pad saves the spot, a set pad jumps there on the beat (on a cued deck it sets the start); Shift-click or
+   Clear empties one. **Loop** buttons (¼–16 beats) repeat that many beats on the beat until you press it again; on
+   a stopped deck (cued or paused) a loop is armed and the song comes in looping when you press ▶, until Drop. **Saved
+   loops** (L1–L4, made on the song's waveform in the track editor) are one tap on the deck.
+   The **AI DJ** switch under Play / Stop: on, the auto-DJ mixes songs you leave alone (a song you played, paused
+   or cued plays to its end, then the next one starts); off, it never mixes — each song plays to its end and the
+   cued one starts after it (mix by hand with Drop or ▶); it stays off until you switch it on. The auto-DJ keeps
+   running throughout — no need to press Stop. Every control stays in its place (greyed out when it doesn't
+   apply), so the booth never jumps.
    **Track view** above the decks shows the songs one below another: a scrolling waveform with the beat grid,
    bar numbers, phrases, drops, cue pads and the mix point, plus BPM, key, time, bar/beat and phrase — during a
    mix you can watch both songs' beats line up.

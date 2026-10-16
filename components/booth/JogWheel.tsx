@@ -19,9 +19,6 @@ function arc(r: number, from: number, to: number): string {
   return `M ${s.x} ${s.y} A ${r} ${r} 0 0 1 ${e.x} ${e.y}`;
 }
 
-/** Turning a wheel that sets a start point: one full turn = 16 beats (4 bars); with Shift, 4 beats. */
-const BEATS_PER_TURN = 16;
-const FINE_BEATS_PER_TURN = 4;
 /** Scroll / keys save the start point once they pause for this long (ms). */
 const COMMIT_AFTER = 350;
 /** Let go while spinning the song on air backwards faster than this (°/s, ~3 turns a second): a spinback. */
@@ -153,10 +150,9 @@ export function JogWheel({
     if (!s) return;
     const t = performance.now();
     recent.current = [...recent.current.filter((r) => t - r.t < FLING_WINDOW_MS), { t, deg }];
-    // On air: like vinyl (fine: a quarter as far). Start point: beats per turn.
-    const seconds = s.live
-      ? (deg / DEG_PER_SECOND) * (fine ? 0.25 : 1)
-      : (deg / 360) * (fine ? FINE_BEATS_PER_TURN : BEATS_PER_TURN) * s.beat;
+    // Every wheel turns like vinyl (one turn ≈ 1.8 s of audio; fine: a quarter as far), so a scratch sounds the
+    // same on every deck. A start point still snaps to the beat when it's let go.
+    const seconds = (deg / DEG_PER_SECOND) * (fine ? 0.25 : 1);
     move(from(s) + seconds);
   };
   /** Turning backwards fast on the song on air: spin it back (instead of letting go normally). */
@@ -292,7 +288,7 @@ export function JogWheel({
       // or where the hand has it.
       const angle =
         s && !s.live
-          ? (((turning.current ?? s.position) / s.beat) * (360 / BEATS_PER_TURN)) % 360
+          ? ((turning.current ?? s.position) * DEG_PER_SECOND) % 360
           : turning.current !== null
             ? (turning.current * DEG_PER_SECOND) % 360
             : view

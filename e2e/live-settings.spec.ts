@@ -14,7 +14,7 @@ test("key lock and the deck count change mid-set with no reload, and the music n
   await startBooth(page, "Groove");
   await expect.poll(async () => (await deckStates(page)).join(" "), { timeout: 30_000 }).toMatch(/A:On air/);
   const song = title(await onAir(page));
-  await expect(deck(page, "A").getByText("Key lock", { exact: true })).toHaveCount(0);
+  await expect(deck(page, "A").getByText("Key lock", { exact: true })).toBeHidden();
 
   // Key lock on, from the Library page, while the set plays.
   await page.click("nav >> text=Library");
@@ -31,7 +31,7 @@ test("key lock and the deck count change mid-set with no reload, and the music n
   await page.click("nav >> text=Library");
   await keyLockBox(page).uncheck();
   await page.click("nav >> text=Booth");
-  await expect(deck(page, "A").getByText("Key lock", { exact: true })).toHaveCount(0);
+  await expect(deck(page, "A").getByText("Key lock", { exact: true })).toBeHidden();
   await taps.reset();
   await page.waitForTimeout(1500);
   expect((await taps.get()).pre).toBeGreaterThan(0.05);

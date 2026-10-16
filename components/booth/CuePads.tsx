@@ -23,7 +23,8 @@ export function CuePads({
   onGo,
 }: {
   deck: number;
-  track: Track;
+  /** The song (null: no song — the pads show, disabled). */
+  track: Track | null;
   color: string;
   /** The deck's mix is under way (or about to start): the pads wait. */
   disabled: boolean;
@@ -34,12 +35,12 @@ export function CuePads({
 }) {
   const setHotCue = useLibrary((s) => s.setHotCue);
   const [clearing, setClearing] = useState(false);
-  const a = track.analysis;
-  if (!a) return null;
-  const pads = Array.from({ length: HOT_CUES }, (_, i) => track.hotCues?.[i] ?? null);
+  const a = track?.analysis ?? null;
+  const pads = Array.from({ length: HOT_CUES }, (_, i) => track?.hotCues?.[i] ?? null);
   const letter = "ABCD"[deck];
 
   const press = (slot: number, shift: boolean) => {
+    if (!track || !a) return;
     const at = pads[slot];
     if (at !== null && (clearing || shift)) {
       void setHotCue(track.id, slot, null);
@@ -61,7 +62,7 @@ export function CuePads({
           type="button"
           className={`rounded border px-2 py-0.5 text-[11px] font-semibold ${clearing ? "border-bad text-bad" : "border-border text-muted hover:text-foreground"}`}
           aria-pressed={clearing}
-          disabled={!pads.some((p) => p !== null)}
+          disabled={!track || !pads.some((p) => p !== null)}
           onClick={() => setClearing((c) => !c)}
           title="Then tap a pad to empty it (or Shift-click a pad)"
         >
@@ -75,9 +76,9 @@ export function CuePads({
             <button
               key={slot}
               type="button"
-              disabled={disabled && !clearing}
+              disabled={!track || (disabled && !clearing)}
               onClick={(e) => press(slot, e.shiftKey)}
-              aria-label={set ? `Cue ${PAD_LETTERS[slot]}, ${barLabel(beatBar(a, at))}, Deck ${letter}` : `Save cue ${PAD_LETTERS[slot]}, Deck ${letter}`}
+              aria-label={set && a ? `Cue ${PAD_LETTERS[slot]}, ${barLabel(beatBar(a, at))}, Deck ${letter}` : `Save cue ${PAD_LETTERS[slot]}, Deck ${letter}`}
               title={set ? (clearing ? "Clear this pad" : "Go here (Shift-click to clear)") : "Save the deck's spot here"}
               className="flex h-12 flex-col items-center justify-center rounded-lg border text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-40"
               style={
@@ -89,7 +90,7 @@ export function CuePads({
               }
             >
               <span>{PAD_LETTERS[slot]}</span>
-              <span className="font-mono text-[10px] font-normal leading-none">{set ? barLabel(beatBar(a, at)).replace("Bar ", "") : "+"}</span>
+              <span className="font-mono text-[10px] font-normal leading-none">{set && a ? barLabel(beatBar(a, at)).replace("Bar ", "") : "+"}</span>
             </button>
           );
         })}

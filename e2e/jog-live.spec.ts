@@ -76,17 +76,27 @@ test("the jog wheel on the song on air: hold and scratch it, let go and it plays
   await taps.reset();
   await page.waitForTimeout(1500);
   expect((await taps.get()).pre).toBeLessThan(0.001);
-  await deck(page, "A").getByRole("button", { name: "Resume Deck A" }).click();
+  await deck(page, "A").getByRole("button", { name: "Play Deck A" }).click();
   await expect.poll(() => states(page)).toMatch(/A:On air/);
   expect(await playedA(page)).toBeGreaterThanOrEqual(moved);
   expect(errors).toEqual([]);
 });
 
-test("no jog wheel on the song on air while it's mixing", async ({ page }) => {
+test("with both decks playing together, the jog wheel works on both", async ({ page }) => {
   await loadLibrary(page);
   await startBooth(page, "Groove");
   await expect.poll(() => states(page), { timeout: 30_000 }).toMatch(/A:On air.*B:Cued/);
-  await deck(page, "B").getByRole("button", { name: "Play Deck B now" }).click();
-  await expect.poll(() => states(page), { timeout: 15_000 }).toMatch(/B:Playing along/);
-  await expect(page.getByRole("slider", { name: "Song position, Deck A" })).toHaveCount(0);
+  await deck(page, "B").getByRole("button", { name: "Play Deck B" }).click();
+  await expect.poll(() => states(page), { timeout: 3000 }).toMatch(/B:Playing along/);
+  await expect(page.getByRole("slider", { name: "Song position, Deck A" })).toHaveCount(1);
+  // Deck B's wheel holds and moves its song too: held, it stops (Scratch); let go, it plays on.
+  const jogB = page.getByRole("slider", { name: "Song position, Deck B" });
+  await expect(jogB).toHaveCount(1);
+  await page.waitForTimeout(1500);
+  const before = (await deckStates(page)).find((d) => d.startsWith("B:"))!;
+  await spin(page, jogB, 2, false);
+  expect(await states(page)).toMatch(/A:On air.*B:Scratch/);
+  await page.mouse.up();
+  await expect.poll(() => states(page), { timeout: 3000 }).toMatch(/A:On air.*B:Playing along/);
+  expect((await deckStates(page)).find((d) => d.startsWith("B:"))).not.toBe(before);
 });

@@ -41,8 +41,8 @@ Full product plan: https://claude.ai/code/artifact/903692c7-9f12-49a9-9de1-5a82b
    From 15 Oct 2026 (owner): a **tempo slider on the on-air and cued decks** (±8%, through `AutoDJ.setDeckTempo`,
    which re-times the next mix), a **spinback** (flick the on-air jog backwards fast: the song spins back and the
    cued song drops in), and the song's **cover art** on the jog wheel. Also a **Sync** button per deck (one press
-   sets its BPM to the other deck's, through `setDeckTempo`) and **8 cue pads** (hot cues A–H) per deck. While the
-   set is paused, jog wheels are silent (no scratch over a deliberate silence). And (16 Oct 2026) **beat loops**
+   sets its BPM to the other deck's, through `setDeckTempo`) and **8 cue pads** (hot cues A–H) per deck. Jog wheels
+   scratch on the club speakers whether the music plays or is paused (owner, 18 Oct 2026). And (16 Oct 2026) **beat loops**
    (¼–16 beats) on the song on air, and an **AI DJ on/off** switch: off, the auto-DJ still cues the best next song but
    doesn't mix by itself (Up next waits for Drop / ▶ Play now); if nobody mixes it comes in near the song's end and AI
    DJ switches back on, so the music never stops. (17 Oct 2026) **▶ Play now** on the cued deck while a song is on
@@ -50,6 +50,18 @@ Full product plan: https://claude.ai/code/artifact/903692c7-9f12-49a9-9de1-5a82b
    **Saved loops** per song (track editor) and **loops on the cued deck** (armed before it plays, looping while
    playing together until Drop). **Cue in / cue out** markers (cue out: where the auto-DJ hands over), and the
    **settings file in the music folder** (settings + song edits travel with the music).
+   (18 Oct 2026) **Pausing never changes the music**: ⏸ only pauses that deck (its song stays), and nothing mixes
+   or swaps by itself while a deck is paused; ▶ plays at once (on the other deck's next beat); the **Layer button
+   is removed** (▶ Play now + Drop do its job); every booth control is always shown, greyed out when it doesn't
+   apply, so the layout never jumps. And: **two decks play independently** — ▶ Play now plays both at full level, nothing mixes or
+   swaps by itself (only Drop, or a song ending); **AI DJ off** means no automatic mixing at all — songs play to their
+   end and the cued one follows, and AI DJ never switches itself back on; every jog wheel turns like vinyl.
+   (Owner, latest — supersedes the locks above.) **Every deck is a plain player with no conditions**: one
+   **▶ Play / ⏸ Pause** toggle (no "Resume" / "Play now"), a **CDJ-style CUE**, and loops, cue pads, tempo, Sync
+   and the jog wheel on any deck with a song, at any time — AI DJ on or off, also during the auto-DJ's own mix
+   (it lets go and both songs play on). **AI DJ on mixes only songs nobody touched**: once staff play, pause or
+   cue a song, that song plays to its end and the next one starts then. Before Play, ▶ on a loaded deck starts
+   the set with that song on that deck. The headphone preview is called **🎧 Listen**.
    Every action goes through `AutoDJ`: it still beat-matches, chooses the transition, times it on the grid
    and steers back to the mood. Do not add manual decks, crossfader, per-deck EQ/faders, skip/seek or an
    energy slider, and never let UI write to deck automation directly.
@@ -64,7 +76,8 @@ Full product plan: https://claude.ai/code/artifact/903692c7-9f12-49a9-9de1-5a82b
 6. **The music must never stop.** Keep every fail-safe working: silence watchdog, early-end recovery,
    decode-failure skip, standby deck (3+ decks), auto-resume after reload. The one exception is a staff pause
    (decision 2): the silence is deliberate, so the watchdog and early-end recovery stand down until ▶, and a
-   reload while paused doesn't auto-resume.
+   reload while paused doesn't auto-resume. When a playing song ends with nothing else playing, the other deck's
+   song starts at once (from its cue point or paused spot): only a pause stops the music.
 7. **Licensing:** no AGPL/GPL dependencies (e.g. essentia.js is AGPL — don't add it). Prefer MIT/Apache/BSD.
 
 ## Architecture
@@ -181,7 +194,9 @@ the selector's own picks (the selector never picks a queued track; the standby d
 `next` replaces the cued track if its mix hasn't started. A request is never lost on re-plan: mood change,
 Drop and recovery put it back in the queue. After a requested track outside the mood's tempo band, `jump` is
 set so the next pick steers back into the mood. The picker ranks every analysed track with
-`rankForRequest()` (same score as the auto-DJ, recently played last, off-tempo flagged).
+`rankForRequest()` (same score as the auto-DJ, recently played last, off-tempo flagged). While the picker is open the page
+behind it doesn't scroll (`overflow: hidden` on `<html>`, the scrollbar's width kept as padding; the list is
+`overscroll-contain`; `e2e/picker-scroll.spec.ts`).
 
 Volume matching: analysis measures integrated loudness (`loudness.ts`, on the 11 kHz mono analysis signal —
 our own scale, not true LUFS). `Deck.load(track, buffer, target)` sets the deck's `trim` gain to bring the
@@ -309,14 +324,12 @@ low-pass over the last bar and snapping open on the drop, a reverb wash on cuts;
 clean. Re-planning a transition cancels them (`MasterFx.cancelScheduled`, eases each effect back to rest).
 `snapshot().activeFx` (from `fxWindows`) lights the FX pad, with "· auto" for the auto-DJ's own.
 
-Layer: `AutoDJ.layer(track?)` — only if `canLayer` (both grids reliable, tempos beat-matchable incl. half-time,
-both keys known and ≥ `LAYER_MIN_KEY`: same, ±1 or relative). From the next 4-bar phrase `layerIn` brings the
-song in beat-matched with its bass killed, rising to 85%, while the current song's mids dip 4 dB; the plan has
-no end (`Planned.layer`). Drop calls `finishLayer`: `layerSwap` swaps the basslines on the next 4-bar phrase and
-fades the old song over 2 bars under a rising high-pass, then the usual hand-over. A safety timer swaps by itself
-before the current song's outro or 8 bars before the layered song ends, so the music never stops. The layered
-song comes in on its hook (else its drop) unless staff chose beginning / drop / a bar (`layerEntry`). The booth's
-Layer button layers the cued song if it matches, else opens the picker filtered to matching songs.
+Layer machinery (no button since 18 Oct 2026; ▶ Play now uses it): `scheduleLayer` brings a song in beat-matched
+with its bass killed (`layerIn`: rising to 85%, the current song's mids dip 4 dB); the plan has no end
+(`Planned.layer`). `finishLayer` (Drop, the drop swap or the safety swap): `layerSwap` swaps the basslines on the
+next 4-bar phrase (or at `at`) and fades the old song over 2 bars under a rising high-pass, then the usual hand-over;
+with `incFull` (the song playing along already at full level) only the old song's bass goes and it fades.
+`canLayer` / `LAYER_MIN_KEY` remain in the selector (the picker's `layerable` flag), unused by the booth.
 
 Audio outputs (Library → Audio outputs; `settings.mainOutput`, `settings.previewOutput`): the mix goes to the club
 speakers (`AudioEngine.setOutput`, e.g. Bluetooth or the 3.5 mm jack; changeable mid-set), every preview to the
@@ -333,8 +346,8 @@ time. Cue plays from where the deck will start (`cuePlan`, through a dialogue's 
 cue playhead into a bar entry (`barAt`). Closing the picker or the editor stops its preview. A deck's cue also
 stops when its mix is about to start, when its song or role changes, and when the set starts (`useSession.play`).
 
-Jog wheel (`JogWheel` with `scrub`, loaded and cued decks until their mix begins): drag round (1 turn = 4 bars,
-Shift = 1 bar), scroll (1 beat a notch) or keys (←/→ beat, Shift bar, PageUp/PageDown 8 bars, Home). It shows
+Jog wheel (`JogWheel` with `scrub`, loaded and cued decks until their mix begins): drag round (like vinyl on every
+deck since 18 Oct 2026 — one turn ≈ 1.8 s of audio, Shift a quarter of that — so every deck scratches the same), scroll (1 beat a notch) or keys (←/→ beat, Shift bar, PageUp/PageDown 8 bars, Home). It shows
 the start point (platter angle, "Bar 11.2", the overview's ⚑ moves live) and saves it on release / after a
 pause as a beat-snapped fractional bar entry (`beatBar`; `{ kind: "bar", bar: 10.25 }` = bar 11, beat 2) through
 the same `setEntry` / `setPreloadEntry` as Start from.
@@ -362,25 +375,51 @@ under each output in Library → Audio outputs (`VolumeSlider`), both saved and 
   every preview sound goes through (Cue, picker ▶, the track editor and its grid clicks); applied on hydrate.
 - Each output's **Test sound** plays at that output's volume.
 
-Deck play / pause (`AutoDJ.pauseDeck(i)` / `playDeck(i)`, `useSession`, the booth's big ⏸ / ▶ under each
-on-air and cued deck's title; `TransportButton` in `DeckPanel`):
-- ⏸ on air with no mix sounding: the deck fades out in `PAUSE_FADE` (60 ms) and stops; `paused` keeps its position
-  (and a pending dialogue jump). The cued transition is **held** (`holdPlanned`: timer, automation and effects
-  cancelled, `plan = HELD_PLAN`, the song stays loaded); `planNext` while paused holds instead of scheduling
-  (`hold`). Watchdog and early-end recovery are off, Drop / Layer / effects refuse, the standby is dropped, and
-  `status.paused` drives the badge, the banner and "When you press ▶". Mood changes, requests and Start from
-  still work on the held song. Saved as not playing, so a reload stays silent.
-- ▶ on the paused deck: it restarts from its position at rate 1 with a `RESUME_FADE` fade-in, and the held song is
-  scheduled as usual. ▶ on the held cued deck: that song starts at once (`firstStart`, fade-in) and the paused one
-  is unloaded.
-- ⏸ during a mix on the outgoing deck (`takeOver`): it fades out, the incoming eases every control to neutral
-  (`Deck.easeToNeutral`; filters glide to an inaudible cut-off so `clearFilter` is silent), a layer glides back
-  to its own tempo, and `handover()` runs at once. On the incoming deck (`cancelMix`): it fades out, the outgoing
-  eases back to full, and the same song is re-planned `deferred` — over the current song's outro (`mixOutPoint`
-  without the mood rule). The plan keeps `deferred` through Start from re-plans.
-- ▶ on the cued deck while playing: `schedule(…, { soon: true })` — a blend from the next 4-bar boundary, or a
-  landing entry (drop / dialogue / Desi Night) timed like a staff Drop. Refused within `SCHEDULE_MARGIN` of the
-  planned start, during a layer, or while the live song is in its dialogue (the button is disabled then).
+Deck controls (`AutoDJ.pauseDeck` / `playDeck` / `cue` / `loop` / `jumpTo` / `setDeckTempo`, `useSession`;
+`Transport` (CUE + one ▶ / ⏸ button) in `DeckPanel`). Rules: **nothing is locked** — every control works on any
+deck with a song, at any time; **pausing never changes the music**; **the auto-DJ only mixes songs nobody touched**.
+- Roles: `current` (the song on air) and `planned` (the next song). `isCued(p)`: loaded, not playing (held, or its
+  mix still to come). `isPair(p)`: two songs side by side (a started `layer` plan without a swap under way).
+- `letGo()`: ▶, ⏸, CUE or a hand on a wheel during the auto-DJ's own mix ends its automation — `toPair` (both at
+  full, effects and tempo glide cancelled, `touched`), or, when the outgoing fader is already ~0 (a cut, an
+  echo-out), an immediate `handover`. Loops, cue pads and tempo during a mix just apply to that deck; the mix
+  carries on. `Deck.cancelJump()` (called by `jumpAt` / `setLoop`) lets a pending dialogue jump go, so loops and
+  pads work during a dialogue too (the song then plays straight on).
+- `touched` (`current.touched`, `Planned.touched`): set by ⏸ / ▶ / CUE / a wheel hold on the song on air, by ▶ or
+  CUE on the cued song, and for every pair. `schedule()` plans a **manual** transition when AI DJ is off or either
+  song is touched (`manual`: a `cut` at the very end of the song on air; Up next "After this song"); Drop
+  (`staffDrop`) still mixes. `unplan()` returns `touched`, `reschedule()` keeps it.
+- ⏸ on air with nothing else sounding: the deck fades out in `PAUSE_FADE` (60 ms) and stops; `paused` keeps its
+  position, tempo and a pending dialogue jump (`pauseStateOf`). The cued transition is **held** (`holdPlanned`), and
+  `planNext` holds instead of scheduling. Watchdog and early-end recovery are off, effects refuse, the standby is
+  dropped; `status.silent` drives the floating Paused banner. Saved as not playing, so a reload stays silent.
+- Pair: ⏸ on either deck pauses only it (`paused` / `pausedAlong`, each with `hold` for a hand on the wheel —
+  `status.holding` is that deck's index). Nothing in a pair mixes or swaps by itself: `rearmPair` only times each
+  playing (unpaused, unlooped) song's end, and `songEnded` applies the never-stop rule — the song on air ending
+  hands over to the one playing along (`handover`; if that one was stopped, it starts at once); the one playing
+  along ending frees its deck (a new song is cued) and, if the song on air was paused, that one starts again. Only
+  Drop mixes (`finishLayer`, `layerSwap(…, incFull)`).
+- ▶ (`playDeck`): a stopped song plays from where it stands — `resumeSynced` (on the partner's next beat,
+  tempo-matched, same beat of the bar) when the other deck plays, else `startNow` (at once, own tempo; also when a
+  wheel lets go). The song on air then re-plans the held next song (`afterLiveResume`). ▶ on the cued song:
+  `scheduleLayer` (together at full, beat-matched when possible; `alone` if the song on air is paused).
+- CUE (`AutoDJ.cue(i, down)`, CDJ): cue points live in `cuePoints` per deck (keyed by track id); the default is
+  where the song started (`current.from`) or, for the cued song, its start point (`startOf`). Down on a playing deck:
+  pause + `movePaused` to the cue point. Down on a stopped deck away from it (> `CUE_SNAP`): that spot becomes the cue
+  point, silently. Down at the cue point: `startNow` from it and `cueHeld`; up: back there, stopped (`cueUp`).
+  ▶ while held (`keepCue`) keeps it playing — the booth's ▶ acts on pointer-down while CUE is held, before CUE
+  loses focus. On the cued song, down plays it at once (`scheduleLayer(…, { alone, quiet })`); up takes it back and
+  re-plans it as cued and `touched` (it starts when the song on air ends). `status.cuePoints` feeds the overview ⚑.
+- Loops on a stopped song (paused or cued) are **armed** (`armed`, a map by track id): `applyArmed` starts them when
+  the song plays (`startNow`, `resumeSynced`, `scheduleLayer`; `intoArmed` moves the start inside the loop). A loop
+  on the song on air holds a cued mix that hasn't started; one under way carries on.
+- Before the set, ▶ on a loaded deck calls `useSession.play(deck)` → `start({ first, firstDeck, next })`: that song
+  plays first on that deck, the other loaded decks follow in deck order.
+- The booth's controls are all always rendered (transport, tempo / Sync, Change / Eject, Start from with all five
+  choices, 🎧 Listen, loops with four saved-loop slots, cue pads, the AI DJ switch, Up next, the bar counter, a row
+  per deck in the track view, reserved space for notes and warnings); only a deck without a song greys them out, so
+  nothing moves (`e2e/stable-layout.spec.ts` measures it). `e2e/cdj-cue.spec.ts` covers CUE, the toggle, controls
+  during a mix and ▶ before the set.
 
 Tempo sliders (`DeckPanel`, beside the jog wheel of the on-air and cued decks during a set; ±`MAX_TEMPO` = 8%,
 double-click or the % button resets; BPM and "tempo ±x%" now sit under the title, the jog centre shows cover art):
@@ -391,7 +430,7 @@ double-click or the % button resets; BPM and "tempo ±x%" now sit under the titl
   Paused: `paused.rate`, used on ▶ (a pause also keeps the tempo it was at, or heading for mid-glide).
 - Cued: `Planned.tempo`, the rate it settles at after its mix — the hand-back glide aims there instead of 1, and
   unsynced entries (cut, echo-out, rewind) start at it. Kept through every re-plan (`unplan` returns it).
-- Refused (slider disabled) within `SCHEDULE_MARGIN` + 1 s of the cued mix and while it sounds.
+- During a mix under way the deck goes to the new tempo at once (`changeRate`; the hand-back glide is replaced).
 The slider shows the live rate every frame (the auto-DJ's sync and glides move it), the cued song's target before
 its mix.
 
@@ -432,20 +471,21 @@ too) and re-planned on exit. Drop, ▶ Play now and Layer end the loop first (`e
 or a hand on the wheel lets it go. Refused during or just before a mix, while paused and in a dialogue.
 `status.loop` / `snapshot.loop` drive the lit button, "After the loop" and the shaded region in the track view.
 
-Playing together (▶ Play now while a song is on air, not paused): `playDeck` calls `scheduleLayer(…, { together })`
-when the tempos can be beat-matched (`syncRatio`, both grids ≥ `MIN_BLEND_CONFIDENCE`) and the song isn't set to start
-from its drop; otherwise the old "next phrase" mix (`schedule(…, { soon })`). Like Layer (`layerIn`: from the next
-4-bar phrase, its bass off, rising to 85%, the old song's mids dipped) but for any key, starting from its own start
-point (Auto = default start, else its Start from), and the swap is armed at its first drop after that
+Playing together (▶ Play now while a song is on air): `playDeck` calls `scheduleLayer(…, { together })` when the
+tempos can be beat-matched (`syncRatio`, both grids ≥ `MIN_BLEND_CONFIDENCE`) and the song isn't set to start from its
+drop. It starts **at once** at full level (both decks full — no bass kill, no dip): on the song on air's next beat,
+from its own start point (Auto = cue in, else its Start from) moved on to the same beat of the bar, when the two can
+be beat-matched; otherwise right away at its own tempo. Any key, any tempo. (Earlier the swap was armed at its first
+drop after that
 (`layer.swapAt`, `finishLayer(at)` → `layerSwap` exactly there), else the usual safety before either song runs out.
 Drop swaps earlier (`finishLayer()`). After the swap the new song glides to its own (or staff's) tempo.
 `UpNext.together` drives "Playing together", "together · mixes at its drop in …" and the "Playing along" badges.
 
-AI DJ mode (`AutoDJ.setAuto(on)`, the "AI DJ" switch under Play / Stop): off, `schedule` treats every automatic mix
-like Desi Night's hold (`manual`: `holding`, timed over the song's outro — `mixOutPoint` without the mood rule, or
-`mixOutPoint(a, 8)` for landing entries — and no opener auto-drop); staff Drop / ▶ Play now plan normally. A plan
-made while off is `Planned.manual`: if it reaches `handover()` with AI DJ still off (nobody mixed), AI DJ switches back
-on with a note. Toggling re-plans a cued mix that hasn't started. Not saved: a reload starts with AI DJ on.
+AI DJ mode (`AutoDJ.setAuto(on)`, the "AI DJ" switch under Play / Stop): off, `schedule` plans no mix at all
+(`manual`): the cued song starts the moment the song on air ends (`cut` at its last 50 ms, `firstStart`), nothing
+overlaps, no Drop countdown (`UpNext.afterSong`: "After this song"; no MIX marker, `mixOutPosition` null), and the
+song's ending isn't treated as "ended early". Staff Drop / ▶ Play now still mix by hand. AI DJ never switches itself
+back on. Toggling re-plans a cued mix that hasn't started. Not saved: a reload starts with AI DJ on.
 
 Sync (`AutoDJ.syncDeck(i)`, button under each tempo slider): the song on air takes the cued song's tempo after its
 mix (`b.bpm × Planned.tempo`), the cued song takes the song on air's current BPM; `syncRatio(…, true)` allows half
@@ -597,8 +637,8 @@ device, and starts `next start -p 3100` (build first). Audio runs for real; noth
   (no detail above ~5 kHz). A song's first appearance shows bar blocks for a moment while it is prepared.
 - While a loop plays, the track view still draws the song ahead as it would play without the loop. Loops end at
   the song's end at the latest; a tempo glide under way freezes at its current rate while looping.
-- Playing together keeps the new song's bass off until the swap; there's no control over its level while both play.
-  Two songs in clashing keys can sound rough together (Layer still refuses those; ▶ Play now doesn't).
+- Two songs playing together are both at full level; there's no control over either's level while both play.
+  Two songs in clashing keys can sound rough together (▶ doesn't refuse them).
 - Cue pads only jump the song on air between beats of its own grid, so a wrong beat grid makes the jump land off
   the beat (fix the grid in the track editor). A pad saved on a session-only file is lost with the file.
 - Spinback is a fixed recipe (0.9 s, reversed audio speeding up), not a physical spin-down; it needs a cued song.
@@ -607,18 +647,23 @@ device, and starts `next start -p 3100` (build first). Audio runs for real; noth
   louder or quieter than the song; the song restarts at its own tempo when let go, so the next mix is re-planned.
 - Switching key-lock mid-set smears for ~40 ms (the key-locked route is ~45 ms later). Track edits in another
   tab reach the booth, but a song already on a deck keeps the analysis it was loaded with until it plays again.
-- Deck pause/resume is a fade-out / fade-in, not a vinyl-style stop; a resumed song restarts at its own tempo
-  (rate 1), so a tempo glide that was under way is skipped. A song paused during its mix doesn't keep its position:
-  it comes in again from its usual start. There's no "pause both decks" during a mix (owner's choice: ⏸ stops one
-  side), and ▶ on the cued deck isn't available during a layer.
+- Deck pause/play is a short fade-out / fade-in, not a vinyl-style stop. Pressing ▶, ⏸, CUE or a wheel during the
+  auto-DJ's own mix ends that mix's automation: both songs jump to full level (staff then mix with Drop). Loops,
+  pads or tempo during a mix leave its automation running, so a song can loop or drift while it fades out.
+- CUE: holding it on the cued song plays it at once at its own tempo, not beat-matched (like a CDJ); ▶ while
+  holding needs a second finger on a touchscreen, or Space on the focused CUE button plus a mouse click on ▶.
+  CUE before the set is disabled (🎧 Listen previews instead). Cue points live in memory only (not saved with
+  the song; the cue pads are).
+- The auto-DJ's "touched" rule is per song: after staff play, pause or cue a song it never mixes out of it, so
+  that song always plays to its very end (no early mix-out at a breakdown).
 - The level meter shows the mix before the club speakers' volume, so it still moves with the volume at 0.
 - With no separate preview output, previews and the mix share one device, so the two volumes set two sounds on the
   same speakers (the headphones slider then only changes previews).
 - The editor preview doesn't apply key-lock or volume matching, so it can sound slightly different from the booth.
-- Layer uses two decks (the playing and the cued). Layering a third song, or an a-cappella crate over the running
-  mix on decks C/D, isn't built; nor is vocal separation (needs an ML model).
-- Layering clashing keys is refused rather than pitch-shifted (owner decision); songs without a known key
-  can't be layered.
+- Two songs play together on two decks (the playing and the cued); a third song over them, or an a-cappella crate on
+  decks C/D, isn't built; nor is vocal separation (needs an ML model). Clashing keys aren't pitch-shifted.
+- ▶ starts on the next beat (not the next phrase), matched to the bar; a song resumed into a pair starts from its own
+  next beat moved to the partner's beat of the bar, so up to 3 beats of it are skipped.
 - No server side (by owner decision for now): no accounts, sync, multi-venue, backup, remote control,
   crowd input or MIDI controllers.
 - Dev tooling has known `npm audit` advisories (vitest 3, eslint-config-next); none ship in the app.
