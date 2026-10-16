@@ -12,12 +12,14 @@ const SECTIONS = [
   { id: "track-view", title: "Track view" },
   { id: "moods", title: "Moods" },
   { id: "play", title: "Play, Stop and the auto-DJ" },
+  { id: "ai-dj", title: "AI DJ on / off" },
   { id: "load", title: "Loading decks before Play" },
   { id: "during", title: "During the set" },
   { id: "decks", title: "Deck controls" },
   { id: "jog", title: "The jog wheel" },
   { id: "tempo", title: "Tempo sliders and Sync" },
   { id: "pads", title: "Cue pads" },
+  { id: "loops", title: "Loops" },
   { id: "headphones", title: "Headphones: Cue and previews" },
   { id: "volume", title: "Volume" },
   { id: "desi", title: "Desi Night" },
@@ -182,6 +184,18 @@ export function Guide() {
           </p>
         </Section>
 
+        <Section id="ai-dj" title="AI DJ on / off">
+          <p>
+            The <B>AI DJ</B> switch under Play / Stop (during a set) decides who mixes. <B>On</B> (normal): the auto-DJ mixes every song in
+            by itself. <B>Off</B>: it still picks the best next song and cues it, but it doesn&apos;t mix by itself — Up next says{" "}
+            <B>waits for Drop</B>, and you bring it in with <B>Drop</B> (or <B>▶ Play now</B>), still beat-matched for you.
+          </p>
+          <p>
+            If nobody mixes and the song nears its end, the AI DJ brings the cued song in by itself and switches back <B>on</B> (&quot;AI DJ is
+            back on&quot;), so the music never stops. Switching it on again at any time hands the mixing back.
+          </p>
+        </Section>
+
         <Section id="load" title="Loading decks before Play">
           <p>
             Before pressing Play you can choose the first songs yourself: <B>Load track</B> on a deck, pick a song. Deck A plays first, then
@@ -230,7 +244,7 @@ export function Guide() {
               ["▶ Resume", "Carries on from exactly where it stopped, at the same tempo, and the auto-DJ plans the next mix again."],
               [
                 "▶ Play now (cued deck)",
-                "Mixes the cued song in on the next phrase instead of waiting. While the set is paused, it starts that song at once instead of resuming the old one.",
+                "Starts the cued song on the next phrase, beat-matched, playing together with the song on air (its bass stays off so the two basslines don't clash). Nothing mixes out until the new song reaches its drop — then they swap — or you press Drop. Songs too far apart in tempo to play in time get mixed in instead, and a song set to start from its drop swaps straight in. While the set is paused, ▶ Play now starts that song at once instead of resuming the old one.",
               ],
               [
                 "⏸ during a mix",
@@ -256,12 +270,29 @@ export function Guide() {
           />
           <h3 className="mt-6 text-lg font-semibold">Spinback</h3>
           <p>
-            On the song on air, press on the wheel and <B>swipe backwards (anticlockwise) fast, then let go while still moving</B>. The song
-            spins back like a record and the cued song drops in on its drop. It needs about 3 turns a second at the moment you let go — a quick
-            quarter-to-half-turn flick. Slower, or stopping before you let go, is just a scratch. A mouse or touchscreen works better than a
-            trackpad, and it needs a song cued on the other deck.
+            On the song on air, turn the wheel <B>backwards fast</B>; the song spins back like a record and the cued song drops in on its drop.
+            Any of these works:
           </p>
-          <p className="text-muted">Keys and scroll work on a wheel too — see Keyboard and mouse.</p>
+          <ul className="list-disc space-y-1.5 pl-5">
+            <li>
+              <B>Mouse or one finger:</B> press on the wheel, swipe round anticlockwise fast and let go while still moving.
+            </li>
+            <li>
+              <B>Trackpad:</B> swipe <B>two fingers down</B> fast over the wheel (with the Mac&apos;s usual &quot;natural&quot; scrolling; if
+              your scrolling is set the other way, swipe up). It spins back as soon as the swipe is fast enough — no need to lift your fingers.
+            </li>
+            <li>
+              <B>Touchscreen:</B> put two fingers on the wheel and <B>twist anticlockwise</B> fast, then lift them while still turning.
+            </li>
+          </ul>
+          <p>
+            It needs about 3 turns a second — a quick flick. Slower is just a scratch, and the song plays on from where you stop. It needs a
+            song cued on the other deck. The wheel turns on screen as you go, so you can see which way you&apos;re turning it.
+          </p>
+          <p className="text-muted">
+            A slow two-finger swipe or twist scratches like a drag; a mouse wheel steps one beat per click. Keys work too — see Keyboard and
+            mouse.
+          </p>
         </Section>
 
         <Section id="tempo" title="Tempo sliders and Sync">
@@ -307,6 +338,21 @@ export function Guide() {
             ]}
           />
           <Tip>The pads on the song on air wait while it mixes (jumping then would throw both songs out of time), and during its dialogue.</Tip>
+        </Section>
+
+        <Section id="loops" title="Loops">
+          <p>
+            The song on air has <B>Loop</B> buttons: <B>¼, ½, 1, 2, 4, 8, 16 beats</B>. Press one and the song repeats that many beats,
+            starting on the beat it&apos;s in, so it stays in time. The lit button is the loop playing: press another length to change it, or
+            press the lit one (or <B>Exit loop</B>) to let the song carry on from there.
+          </p>
+          <ul className="list-disc space-y-1.5 pl-5">
+            <li>The auto-DJ&apos;s next mix waits while it loops (Up next says &quot;After the loop&quot;) and is planned again when it ends.</li>
+            <li>
+              Pressing <B>Drop</B>, <B>▶ Play now</B> or a cue pad ends the loop — loop a few beats, then Drop is a classic build-up.
+            </li>
+            <li>The track view shades the loop. Loops wait while the song is mixing, paused or still in its dialogue.</li>
+          </ul>
         </Section>
 
         <Section id="headphones" title="Headphones: Cue and previews">
@@ -384,7 +430,7 @@ export function Guide() {
               ["Crates", "Your own groups, e.g. “Romantic” or “Punjabi”. Moods can be limited to crates."],
               [
                 "Song markers",
-                "Dialogue start/end, hook start/end and a default start. Play the song and press Mark now at the right moment, then nudge. The analysis also suggests a hook and a dialogue — Listen, then Use if it's right.",
+                "Dialogue start/end, hook start/end and a default start, on the song's waveform. The top strip is the whole song (click to look there, double-click to listen); the big view below shows a few seconds with every beat. Drag a marker's handle to move it; drag the waveform (or swipe on a trackpad) to scroll; click to put the yellow cursor there and listen, then press Set here → Dialogue start / end, Hook start / end or Default start. − / + zooms (2–32 s). Hook and default start snap to the bar; the dialogue is exact. Mark now and the nudge buttons still work, and the analysis suggests a hook and a dialogue — Listen, then Use if it's right.",
               ],
               [
                 "Drops",
@@ -455,12 +501,14 @@ export function Guide() {
           <Table
             head={["On a jog wheel", "Does"]}
             rows={[
-              ["Drag round", "Turn it (Shift = finer)"],
-              ["Scroll over it", "One beat per notch"],
+              ["Drag round (mouse or one finger)", "Turn it (Shift = finer)"],
+              ["Two-finger swipe (trackpad)", "Turn it: up = forwards, down = back (natural scrolling)"],
+              ["Two-finger twist (touchscreen)", "Turn it"],
+              ["Mouse wheel", "One beat per click"],
               ["← / →", "One beat back / on (Shift: one bar)"],
               ["Page Down / Page Up", "8 bars back / on"],
               ["Home", "The beginning"],
-              ["Fast backward flick, let go", "Spinback (song on air)"],
+              ["Fast backward flick / swipe / twist", "Spinback (song on air)"],
               ["Shift-click a cue pad", "Empty that pad"],
             ]}
           />

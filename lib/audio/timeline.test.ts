@@ -73,3 +73,29 @@ describe("rebaseTimeline", () => {
     expect(after.positionAt(12)).toBeCloseTo(tl.positionAt(12), 9);
   });
 });
+
+describe("loops", () => {
+  it("plays on to the loop's end, then wraps back to its start, round and round", () => {
+    const tl = new PlaybackTimeline(0, 10, 1);
+    tl.loop = { start: 10, end: 12 };
+    expect(tl.positionAt(1.5)).toBeCloseTo(11.5, 9);
+    expect(tl.positionAt(2.5)).toBeCloseTo(10.5, 9);
+    expect(tl.positionAt(7)).toBeCloseTo(11, 9);
+  });
+
+  it("follows the playback rate, and a rebase keeps the loop going", () => {
+    const tl = new PlaybackTimeline(0, 20, 2);
+    tl.loop = { start: 20, end: 21 };
+    expect(tl.positionAt(0.75)).toBeCloseTo(20.5, 9);
+    const re = rebaseTimeline(tl, 0.75);
+    expect(re.loop).toEqual({ start: 20, end: 21 });
+    expect(re.positionAt(1)).toBeCloseTo(tl.positionAt(1), 9);
+  });
+
+  it("a loop that starts behind the playhead wraps once the playhead reaches its end", () => {
+    const tl = new PlaybackTimeline(0, 30.4, 1);
+    tl.loop = { start: 30, end: 31 };
+    expect(tl.positionAt(0.5)).toBeCloseTo(30.9, 9);
+    expect(tl.positionAt(0.7)).toBeCloseTo(30.1, 9);
+  });
+});

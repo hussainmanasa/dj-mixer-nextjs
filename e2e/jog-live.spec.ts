@@ -87,6 +87,6 @@ test("no jog wheel on the song on air while it's mixing", async ({ page }) => {
   await startBooth(page, "Groove");
   await expect.poll(() => states(page), { timeout: 30_000 }).toMatch(/A:On air.*B:Cued/);
   await deck(page, "B").getByRole("button", { name: "Play Deck B now" }).click();
-  await expect.poll(() => states(page), { timeout: 15_000 }).toMatch(/B:Mixing in/);
+  await expect.poll(() => states(page), { timeout: 15_000 }).toMatch(/B:Playing along/);
   await expect(page.getByRole("slider", { name: "Song position, Deck A" })).toHaveCount(0);
 });

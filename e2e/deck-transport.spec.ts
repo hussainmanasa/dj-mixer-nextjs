@@ -69,7 +69,7 @@ test("▶ on the cued deck mixes it in now; ⏸ during a mix stops that side and
 
   // ▶ Play now on the cued deck: it comes in on the next phrase instead of at the planned mix point.
   await deck(page, "B").getByRole("button", { name: "Play Deck B now" }).click();
-  await expect.poll(() => states(page), { timeout: 15_000 }).toMatch(/B:Mixing in/);
+  await expect.poll(() => states(page), { timeout: 15_000 }).toMatch(/B:Playing along/);
 
   // ⏸ on the incoming deck mid-mix: it stops, Deck A carries on alone at full level.
   await deck(page, "B").getByRole("button", { name: "Pause Deck B" }).click();
@@ -81,7 +81,7 @@ test("▶ on the cued deck mixes it in now; ⏸ during a mix stops that side and
 
   // Bring it in again, then ⏸ on the outgoing deck mid-mix: Deck B carries on alone.
   await deck(page, "B").getByRole("button", { name: "Play Deck B now" }).click();
-  await expect.poll(() => states(page), { timeout: 15_000 }).toMatch(/B:Mixing in/);
+  await expect.poll(() => states(page), { timeout: 15_000 }).toMatch(/B:Playing along/);
   const incoming = (await deckStates(page)).find((d) => d.startsWith("B:"))!.split(" ").at(-1);
   await deck(page, "A").getByRole("button", { name: "Pause Deck A" }).click();
   await expect.poll(() => states(page), { timeout: 5000 }).toMatch(new RegExp(`B:On air .*${incoming}`));

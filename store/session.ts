@@ -57,6 +57,11 @@ interface SessionState {
   spinBack: (deck: number, position: number) => void;
   /** A deck's tempo slider (playback rate). */
   setDeckTempo: (deck: number, rate: number) => void;
+  /** Beat loop on the song on air (`beats` long); pressing the same length again lets it go. */
+  loop: (deck: number, beats: number) => void;
+  exitLoop: (deck: number) => void;
+  /** AI DJ mode on / off (off: staff mix with Drop / ▶ Play now; it takes over near the end of a song). */
+  setAuto: (on: boolean) => void;
   /** Sync: this deck's BPM to the other deck's. */
   syncDeck: (deck: number) => void;
   /** A cue pad on the song on air: jump there on the next beat (paused: move the paused spot). */
@@ -134,6 +139,8 @@ const idle = (mood: MoodId, deckCount: number): AutoDJStatus => ({
   deckCount,
   paused: null,
   holding: false,
+  loop: null,
+  auto: true,
 });
 
 let lastQueueKey = "";
@@ -257,6 +264,21 @@ export const useSession = create<SessionState>((set, get) => ({
   setDeckTempo(deck, rate) {
     if (!dj || get().stopping) return;
     dj.setDeckTempo(deck, rate);
+  },
+
+  loop(deck, beats) {
+    if (!dj || get().stopping) return;
+    const l = get().status.loop;
+    if (l?.deck === deck && l.beats === beats) dj.exitLoop(deck);
+    else dj.loop(deck, beats);
+  },
+
+  exitLoop(deck) {
+    dj?.exitLoop(deck);
+  },
+
+  setAuto(on) {
+    dj?.setAuto(on);
   },
 
   syncDeck(deck) {

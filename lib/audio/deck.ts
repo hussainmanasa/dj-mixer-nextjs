@@ -244,6 +244,43 @@ export class Deck {
     return true;
   }
 
+  /**
+   * Beat loop: from now the source loops between track positions `start` and
+   * `end` (the playhead must be at or after `start` and before `end`: it plays
+   * on to `end`, then wraps). Calling it again resizes the loop. A tempo glide
+   * under way stops at its current rate. False while a dialogue's jump is still to come.
+   */
+  setLoop(start: number, end: number): boolean {
+    const src = this.source;
+    const tl = this.timeline;
+    const now = this.ctx.currentTime;
+    if (!src || !tl || end <= start || (tl.jump && tl.jump.at > now)) return false;
+    this.preJump = null;
+    if (tl.ramp && tl.ramp.t1 > now) {
+      src.playbackRate.cancelAndHoldAtTime(now);
+      this.pitch?.cancelAndHoldAtTime(now);
+    }
+    const next = rebaseTimeline(tl, now);
+    next.loop = { start, end };
+    src.loopStart = start;
+    src.loopEnd = end;
+    src.loop = true;
+    this.timeline = next;
+    return true;
+  }
+
+  /** Let the loop go: the song plays on from wherever the loop has it. */
+  clearLoop(): void {
+    const src = this.source;
+    const tl = this.timeline;
+    if (!src || !tl?.loop) return;
+    const now = this.ctx.currentTime;
+    const next = rebaseTimeline(tl, now);
+    next.loop = null;
+    src.loop = false;
+    this.timeline = next;
+  }
+
   /** Ramp playback rate linearly between two context times (for tempo hand-back). */
   rampRate(t0: number, t1: number, to: number): void {
     if (!this.source || !this.timeline) return;

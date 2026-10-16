@@ -39,13 +39,16 @@ Open http://localhost:3000, then:
    mix, ⏸ stops just that deck and the other song carries on. The **jog wheel on the song on air** works like a record:
    touch it and the song stops under your hand, turn it to scratch, let go and it plays on from there. On a paused
    song, turning it moves the spot ▶ will play from. (Not while two songs are mixing.) Flick the wheel **backwards fast** and let go
-   for a **spinback**: the song spins back and the cued song drops in.
+   for a **spinback** (or swipe two fingers down fast on a trackpad, or twist two fingers back on a touchscreen):
+   the song spins back and the cued song drops in.
    **Tempo slider** beside each playing / cued deck's wheel (±8%): on the song on air it changes the tempo at once
    (the auto-DJ re-times the next mix); on the cued song it's the tempo it settles at after its mix. Double-click
    it, or press its % button, to go back to the song's own tempo. **Sync** under it sets that deck to the other deck's BPM. **Cue pads A–H**
    on each deck: an empty pad saves the spot, a set pad jumps there on the beat (on a cued deck it sets the start);
-   Shift-click or Clear empties one. The wheel's centre shows the song's cover art. ▶ **Play now** on the cued deck mixes it in on the
-   next phrase. The auto-DJ keeps running throughout — no need to press Stop.
+   Shift-click or Clear empties one. **Loop** buttons (¼–16 beats) on the song on air repeat that many
+   beats on the beat until you press it again (the next mix waits). The **AI DJ** switch under Play / Stop turns
+   automatic mixing off: the next song is still cued and waits for **Drop**; near the song's end the AI DJ takes over. The wheel's centre shows the song's cover art. ▶ **Play now** on the cued deck starts it playing
+   together with the song on air (beat-matched); they swap at the new song's drop, or when you press **Drop**. The auto-DJ keeps running throughout — no need to press Stop.
    **Track view** above the decks shows the songs one below another: a scrolling waveform with the beat grid,
    bar numbers, phrases, drops, cue pads and the mix point, plus BPM, key, time, bar/beat and phrase — during a
    mix you can watch both songs' beats line up.
@@ -82,8 +85,9 @@ the venue's public performance licences current (in India, for example, PPL and 
   (listen with clicks), its drop detection or its key.
 - **Moods** — tune each mood's tempo, energy, blend length, how long tracks play, drop swaps, crates, the set
   opener and "hold until Drop".
-- **Song markers** (track editor) — the analysis *suggests* a hook and a dialogue (listen, then **Use**), or mark
-  them yourself while the song plays (*Mark now*); try the dialogue → drop. Used by Drop and **Desi Night**.
+- **Song markers** (track editor) — on the song's waveform: drag the dialogue / hook / start handles, or click to
+  put the cursor there (and listen) and press **Set here**; zoom in to place them exactly. The analysis also
+  *suggests* a hook and a dialogue (listen, then **Use**), and *Mark now* still works while the song plays. Used by Drop and **Desi Night**.
 
 ## Desi Night
 

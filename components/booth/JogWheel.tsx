@@ -28,6 +28,10 @@ const COMMIT_AFTER = 350;
 const FLING_DEG_PER_SECOND = -1080;
 /** The spin speed at release is measured over the last this many ms of the drag. */
 const FLING_WINDOW_MS = 120;
+/** Trackpad two-finger swipe: this many pixels of scroll turn the wheel once. */
+const PX_PER_TURN = 600;
+/** A two-finger swipe has ended once no scroll arrives for this long (ms; momentum scrolling keeps it going). */
+const SWIPE_END_MS = 160;
 
 /**
  * Makes the wheel turnable: on a loaded or cued deck it sets the start point;
@@ -63,9 +67,12 @@ export interface JogScrub {
  * The deck's jog wheel. The platter turns with the track position, so it
  * speeds up or slows down as the auto-DJ syncs tempo, and the ring lights the
  * beat in the bar (beat 1 brightest) so two beat-matched decks flash together.
- * With `scrub` it can be turned: drag it round (Shift = fine), scroll over it,
- * or use the keys — ←/→ one beat, Shift+←/→ one bar, PageUp/PageDown 8 bars,
- * Home the beginning. On a loaded or cued deck that sets the start point; on
+ * With `scrub` it can be turned: drag it round with one finger or the mouse,
+ * twist it with two fingers on a touchscreen, swipe two fingers on a trackpad
+ * (up = forwards, down = back; Shift = fine for all of these), click a mouse
+ * wheel (one beat a notch), or use the keys — ←/→ one beat, Shift+←/→ one bar,
+ * PageUp/PageDown 8 bars, Home the beginning. A fast backward turn of the song
+ * on air is a spinback (`live.onFling`). On a loaded or cued deck that sets the start point; on
  * the song on air (`scrub.live`) it holds and moves the song like a record.
  */
 export function JogWheel({
@@ -90,7 +97,13 @@ export function JogWheel({
   const beats = useRef<(SVGPathElement | null)[]>([]);
   // The start point while turning (null when idle), and a pending save for scroll / keys.
   const turning = useRef<number | null>(null);
-  const drag = useRef<{ angle: number; recent: { t: number; deg: number }[] } | null>(null);
+  // One finger / the mouse: its angle round the centre. Two fingers: the angle of the line between them.
+  const drag = useRef<{ angle: number } | null>(null);
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  const twist = useRef<number | null>(null);
+  // The last moves (for the spinback's speed), and a trackpad swipe in progress.
+  const recent = useRef<{ t: number; deg: number }[]>([]);
+  const swipe = useRef<{ timer: ReturnType<typeof setTimeout> | null; spun: boolean } | null>(null);
   const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latest = useRef(scrub);
   useEffect(() => {
@@ -126,13 +139,67 @@ export function JogWheel({
     commitSoon();
   };
 
-  // Scroll over the wheel: one beat per notch. Native listener so the page doesn't scroll too.
+  /** Take hold: the song on air stops under the hand; a turn starts from where the wheel is. */
+  const grab = () => {
+    const s = latest.current;
+    if (!s || turning.current !== null) return;
+    s.live?.onGrab();
+    turning.current = from(s);
+    recent.current = [];
+  };
+  /** Turn the wheel by `deg` (clockwise = forwards). */
+  const turn = (deg: number, fine: boolean) => {
+    const s = latest.current;
+    if (!s) return;
+    const t = performance.now();
+    recent.current = [...recent.current.filter((r) => t - r.t < FLING_WINDOW_MS), { t, deg }];
+    // On air: like vinyl (fine: a quarter as far). Start point: beats per turn.
+    const seconds = s.live
+      ? (deg / DEG_PER_SECOND) * (fine ? 0.25 : 1)
+      : (deg / 360) * (fine ? FINE_BEATS_PER_TURN : BEATS_PER_TURN) * s.beat;
+    move(from(s) + seconds);
+  };
+  /** Turning backwards fast on the song on air: spin it back (instead of letting go normally). */
+  const fling = (): boolean => {
+    const s = latest.current;
+    const now = performance.now();
+    const r = recent.current.filter((x) => now - x.t < FLING_WINDOW_MS);
+    const span = r.length > 1 ? (now - r[0].t) / 1000 : 0;
+    const speed = span > 0.03 ? r.reduce((sum, x) => sum + x.deg, 0) / span : 0;
+    if (!s?.live?.onFling || turning.current === null || speed >= FLING_DEG_PER_SECOND) return false;
+    const p = turning.current;
+    turning.current = null;
+    recent.current = [];
+    s.live.onFling(p);
+    return true;
+  };
+
+  // Scroll over the wheel: a mouse wheel steps one beat a notch; a trackpad's two-finger swipe turns it
+  // (and a fast swipe back on the song on air spins it back). Native listener so the page doesn't scroll too.
   useEffect(() => {
     const el = root.current;
     if (!el || !scrub) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      stepBeats(Math.sign(e.deltaY || e.deltaX) || 0);
+      if (e.ctrlKey) return; // a pinch
+      const px = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (!px) return;
+      const notch = e.deltaMode !== 0 || (e.deltaX === 0 && Math.abs(e.deltaY) >= 100 && Number.isInteger(e.deltaY));
+      if (notch && !swipe.current) {
+        stepBeats(Math.sign(px));
+        return;
+      }
+      const sw = (swipe.current ??= { timer: null, spun: false });
+      if (sw.timer) clearTimeout(sw.timer);
+      sw.timer = setTimeout(() => {
+        swipe.current = null;
+        if (!sw.spun) commit();
+      }, SWIPE_END_MS);
+      // After a spinback the rest of the swipe (and its momentum) is ignored.
+      if (sw.spun) return;
+      grab();
+      turn((px * 360) / PX_PER_TURN, e.shiftKey);
+      if (fling()) sw.spun = true;
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
@@ -140,51 +207,67 @@ export function JogWheel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [!!scrub]);
 
-  const angleOf = (e: PointerEvent<HTMLDivElement>) => {
-    const box = e.currentTarget.getBoundingClientRect();
-    return (Math.atan2(e.clientY - (box.top + box.height / 2), e.clientX - (box.left + box.width / 2)) * 180) / Math.PI;
+  /** Angle (°) of a point round the wheel's centre. */
+  const centreAngle = (x: number, y: number) => {
+    const box = root.current!.getBoundingClientRect();
+    return (Math.atan2(y - (box.top + box.height / 2), x - (box.left + box.width / 2)) * 180) / Math.PI;
   };
+  /** Angle (°) of the line between the first two fingers. */
+  const pairAngle = () => {
+    const [a, b] = [...pointers.current.values()];
+    return (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
+  };
+  const wrap = (d: number) => d - 360 * Math.round(d / 360);
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
     if (!scrub) return;
-    e.currentTarget.setPointerCapture(e.pointerId);
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* not a live pointer (e.g. synthetic): it still works without capture */
+    }
     e.currentTarget.focus();
-    drag.current = { angle: angleOf(e), recent: [] };
-    // A hand on the song on air stops it where it is.
-    if (turning.current === null) scrub.live?.onGrab();
-    turning.current = from(scrub);
+    // A key / scroll step waiting to be saved: this turn carries it on (and saves it when let go).
+    if (commitTimer.current) clearTimeout(commitTimer.current);
+    commitTimer.current = null;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.current.size === 1) {
+      // A hand on the song on air stops it where it is.
+      grab();
+      drag.current = { angle: centreAngle(e.clientX, e.clientY) };
+    } else if (pointers.current.size === 2) {
+      twist.current = pairAngle();
+    }
   };
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
-    const s = latest.current;
-    if (!drag.current || !s) return;
-    const angle = angleOf(e);
-    let delta = angle - drag.current.angle;
-    delta -= 360 * Math.round(delta / 360);
-    drag.current.angle = angle;
-    const t = performance.now();
-    drag.current.recent = [...drag.current.recent.filter((r) => t - r.t < FLING_WINDOW_MS), { t, deg: delta }];
-    // On air: like vinyl (Shift: a quarter as far). Start point: beats per turn.
-    const seconds = s.live
-      ? (delta / DEG_PER_SECOND) * (e.shiftKey ? 0.25 : 1)
-      : (delta / 360) * (e.shiftKey ? FINE_BEATS_PER_TURN : BEATS_PER_TURN) * s.beat;
-    move(from(s) + seconds);
+    if (!pointers.current.has(e.pointerId) || !latest.current) return;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.current.size >= 2 && twist.current !== null) {
+      // Two fingers: twisting turns it.
+      const angle = pairAngle();
+      const delta = wrap(angle - twist.current);
+      twist.current = angle;
+      turn(delta, e.shiftKey);
+    } else if (drag.current) {
+      const angle = centreAngle(e.clientX, e.clientY);
+      const delta = wrap(angle - drag.current.angle);
+      drag.current.angle = angle;
+      turn(delta, e.shiftKey);
+    }
   };
-  const onPointerUp = () => {
-    const d = drag.current;
-    if (!d) return;
-    drag.current = null;
-    // Flicked backwards fast on the song on air: spin it back.
-    const s = latest.current;
-    const now = performance.now();
-    const recent = d.recent.filter((r) => now - r.t < FLING_WINDOW_MS);
-    const span = recent.length > 1 ? (now - recent[0].t) / 1000 : 0;
-    const speed = span > 0 ? recent.reduce((sum, r) => sum + r.deg, 0) / span : 0;
-    if (s?.live?.onFling && turning.current !== null && speed < FLING_DEG_PER_SECOND) {
-      const p = turning.current;
-      turning.current = null;
-      s.live.onFling(p);
+  const onPointerUp = (e: PointerEvent<HTMLDivElement>) => {
+    if (!pointers.current.delete(e.pointerId)) return;
+    if (pointers.current.size === 1) {
+      // Back to one finger: carry on from where it is, without a jump.
+      const [p] = pointers.current.values();
+      twist.current = null;
+      drag.current = { angle: centreAngle(p.x, p.y) };
       return;
     }
-    commit();
+    if (pointers.current.size > 0) return;
+    drag.current = null;
+    twist.current = null;
+    // Let go while turning back fast on the song on air: spin it back; else let go normally.
+    if (turning.current !== null && !fling()) commit();
   };
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (!scrub) return;

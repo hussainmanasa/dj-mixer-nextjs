@@ -17,7 +17,8 @@ test("the Help page explains the app: reachable from the nav, every contents lin
   await contents.filter({ hasText: "Tempo sliders" }).click();
   await expect(page).toHaveURL(/#tempo$/);
   await expect(page.getByRole("heading", { level: 2, name: "Tempo sliders" })).toBeInViewport();
-  await expect(page.getByText(/swipe backwards \(anticlockwise\) fast/)).toBeAttached();
+  await expect(page.getByText(/swipe round anticlockwise fast/)).toBeAttached();
+  await expect(page.getByText(/twist anticlockwise/)).toBeAttached();
   await page.screenshot({ path: "test-results/help.png" });
 
   // And back to the booth from a link in the text.

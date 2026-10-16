@@ -7,6 +7,7 @@ import { barSeconds, gridPosition, PHRASE_BARS } from "@/lib/dj/mixpoints";
 import { waveformFor } from "@/lib/library/waveform";
 import type { Track } from "@/lib/types";
 import { useLibrary } from "@/store/library";
+import { useSession } from "@/store/session";
 import type { DeckRole } from "./DeckPanel";
 import { PAD_LETTERS } from "./CuePads";
 import { formatTime, setText, useBoothFrame } from "./frame";
@@ -115,7 +116,22 @@ function Row({ row, color, span }: { row: StackRow; color: string; span: number 
     // Where the song is (a cued song before its start: where it would be, so it scrolls in).
     const pos = view ? (view.started ? view.position : view.position - Math.max(0, view.startsAt - snap!.now) * rate) : (startAt ?? 0);
     const mixing = !!snap?.mix && snap.now >= snap.mix.start;
-    setText(badge.current, role === "live" && mixing ? "Mixing out" : role === "incoming" && mixing ? "Mixing in" : (ROLE_LABEL[role] ?? ""));
+    // Two songs layered or playing together: the one on air stays on air until they swap.
+    const together = useSession.getState().status.next?.together;
+    setText(
+      badge.current,
+      snap?.layering
+        ? role === "incoming"
+          ? together
+            ? "Playing along"
+            : "Layered"
+          : (ROLE_LABEL[role] ?? "")
+        : role === "live" && mixing
+          ? "Mixing out"
+          : role === "incoming" && mixing
+            ? "Mixing in"
+            : (ROLE_LABEL[role] ?? ""),
+    );
     setText(bpm.current, (a.bpm * rate).toFixed(1));
     const pct = (rate - 1) * 100;
     setText(tempo.current, Math.abs(pct) >= 0.05 ? `${pct > 0 ? "+" : ""}${pct.toFixed(1)}%` : "own tempo");
@@ -146,6 +162,7 @@ function Row({ row, color, span }: { row: StackRow; color: string; span: number 
       color,
       drops: sectionsRef.current,
       cues: track.hotCues ?? [],
+      loop: snap?.loop && snap.loop.deck === deck ? snap.loop : null,
       mark:
         role === "live" && snap?.mixOutPosition != null
           ? { at: snap.mixOutPosition, label: "MIX" }
@@ -213,6 +230,7 @@ interface DrawOptions {
   drops: { start: number; end: number }[];
   cues: (number | null)[];
   mark: { at: number; label: string } | null;
+  loop: { start: number; end: number } | null;
 }
 
 /** One frame of a row: waveform, drops, beat grid, cue pads, the mix / start point and the playhead. */
@@ -311,6 +329,20 @@ function draw(g: CanvasRenderingContext2D, W: number, H: number, o: DrawOptions)
       g.textBaseline = "top";
       g.fillText(o.mark.label, x + 4 * dpr, 14 * dpr);
     }
+  }
+
+  // A beat loop: shaded, with its edges.
+  if (o.loop) {
+    const x0 = xOf(o.loop.start);
+    const x1 = xOf(o.loop.end);
+    g.fillStyle = "#fbbf24";
+    g.globalAlpha = 0.18;
+    g.fillRect(x0, 0, x1 - x0, H);
+    g.globalAlpha = 1;
+    g.fillRect(x0, 0, 2 * dpr, H);
+    g.fillRect(x1 - 2 * dpr, 0, 2 * dpr, H);
+    g.textBaseline = "top";
+    g.fillText("LOOP", x0 + 4 * dpr, 26 * dpr);
   }
 
   // The playhead.

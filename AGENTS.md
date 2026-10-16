@@ -42,7 +42,11 @@ Full product plan: https://claude.ai/code/artifact/903692c7-9f12-49a9-9de1-5a82b
    which re-times the next mix), a **spinback** (flick the on-air jog backwards fast: the song spins back and the
    cued song drops in), and the song's **cover art** on the jog wheel. Also a **Sync** button per deck (one press
    sets its BPM to the other deck's, through `setDeckTempo`) and **8 cue pads** (hot cues A–H) per deck. While the
-   set is paused, jog wheels are silent (no scratch over a deliberate silence).
+   set is paused, jog wheels are silent (no scratch over a deliberate silence). And (16 Oct 2026) **beat loops**
+   (¼–16 beats) on the song on air, and an **AI DJ on/off** switch: off, the auto-DJ still cues the best next song but
+   doesn't mix by itself (Up next waits for Drop / ▶ Play now); if nobody mixes it comes in near the song's end and AI
+   DJ switches back on, so the music never stops. (17 Oct 2026) **▶ Play now** on the cued deck while a song is on
+   air plays both songs together (beat-matched) — nothing mixes out until the new song's drop or Drop.
    Every action goes through `AutoDJ`: it still beat-matches, chooses the transition, times it on the grid
    and steers back to the mood. Do not add manual decks, crossfader, per-deck EQ/faders, skip/seek or an
    energy slider, and never let UI write to deck automation directly.
@@ -208,6 +212,14 @@ out the playing, cued and already-queued tracks.
 Offline: `public/sw.js` caches `/_next/static` (cache-first), pages and RSC (network-first) and other assets
 (stale-while-revalidate); registered only in production. `experimental.useOffline` powers the banner. A
 reload or reboot works offline for any page opened before; in-app navigation waits until the network is back.
+
+Song markers on the waveform (`components/library/MarkerWaveform.tsx`, top of the track editor's Song markers):
+an overview of the whole song (click / drag to look there, double-click to listen) and a zoomed view (2–32 s,
+beats and numbered bars) drawn every frame from the cached waveform (`waveformFor`) — drops, the dialogue and hook
+ranges, the default start, the yellow cursor and the preview playhead (followed while listening, until you scroll).
+Dragging a handle moves a marker (saved on release; hook and default start `snapToBar`, the dialogue exact to 1 ms);
+dragging the waveform or a trackpad swipe scrolls; Ctrl + wheel / pinch zooms; a click sets the cursor and plays from
+there; "Set here" buttons put any marker at the cursor.
 
 Library track table: **Folders** view (default) mirrors the music folder (`folderTree` from `Track.path`): folder
 rows open and close, each with its song count and — while analysing — how many are left and a progress bar (counts
@@ -375,6 +387,30 @@ the cued / loaded start ("IN"). Zoom: 4–32 s across. Workers: a second `new Wo
 analysis worker's entry by the production bundler, so all CPU work shares `analyze.worker.ts` (messages carry
 `kind`).
 
+Loops (`AutoDJ.loop(i, beats)` / `exitLoop`, `LoopButtons` in `DeckPanel`): `Deck.setLoop(start, end)` sets
+`AudioBufferSourceNode.loop` / `loopStart` / `loopEnd` (the playhead plays on to `end`, then wraps) and the timeline's
+`loop` (`positionAt` wraps the same way; `rebaseTimeline` keeps it; `timeAt` ignores it — nothing is scheduled inside
+a loop). The loop starts on the beat the playhead is in (a short loop: the first loop-length step still ahead) and a
+second press resizes it from the same start. The cued mix is held while looping (`holdPlanned`, `planNext` holds
+too) and re-planned on exit. Drop, ▶ Play now and Layer end the loop first (`endLoop`), a cue pad exits it, a pause
+or a hand on the wheel lets it go. Refused during or just before a mix, while paused and in a dialogue.
+`status.loop` / `snapshot.loop` drive the lit button, "After the loop" and the shaded region in the track view.
+
+Playing together (▶ Play now while a song is on air, not paused): `playDeck` calls `scheduleLayer(…, { together })`
+when the tempos can be beat-matched (`syncRatio`, both grids ≥ `MIN_BLEND_CONFIDENCE`) and the song isn't set to start
+from its drop; otherwise the old "next phrase" mix (`schedule(…, { soon })`). Like Layer (`layerIn`: from the next
+4-bar phrase, its bass off, rising to 85%, the old song's mids dipped) but for any key, starting from its own start
+point (Auto = default start, else its Start from), and the swap is armed at its first drop after that
+(`layer.swapAt`, `finishLayer(at)` → `layerSwap` exactly there), else the usual safety before either song runs out.
+Drop swaps earlier (`finishLayer()`). After the swap the new song glides to its own (or staff's) tempo.
+`UpNext.together` drives "Playing together", "together · mixes at its drop in …" and the "Playing along" badges.
+
+AI DJ mode (`AutoDJ.setAuto(on)`, the "AI DJ" switch under Play / Stop): off, `schedule` treats every automatic mix
+like Desi Night's hold (`manual`: `holding`, timed over the song's outro — `mixOutPoint` without the mood rule, or
+`mixOutPoint(a, 8)` for landing entries — and no opener auto-drop); staff Drop / ▶ Play now plan normally. A plan
+made while off is `Planned.manual`: if it reaches `handover()` with AI DJ still off (nobody mixed), AI DJ switches back
+on with a note. Toggling re-plans a cued mix that hasn't started. Not saved: a reload starts with AI DJ on.
+
 Sync (`AutoDJ.syncDeck(i)`, button under each tempo slider): the song on air takes the cued song's tempo after its
 mix (`b.bpm × Planned.tempo`), the cued song takes the song on air's current BPM; `syncRatio(…, true)` allows half
 / double tempo and refuses beyond ±8%. One-shot (not a lock); the button lights while the BPMs match (frame loop).
@@ -389,8 +425,13 @@ then the cued mix is re-planned; paused, `movePaused`; loaded / cued, a bar entr
 within `SCHEDULE_MARGIN` + 1 s of it) and while a dialogue's jump is still to come. The overview marks set pads.
 Every source now plays through its own gain (`Deck.sourceGain`) so it can be faded at a jump.
 
-Spinback: in `JogWheel`, letting go of the on-air wheel while it turns backwards faster than 1080°/s (measured
-over the last 120 ms) calls `live.onFling` instead of `onCommit`. `AutoDJ.spinBack()` plays `Deck.rewind` from the
+Jog gestures (`JogWheel`): every input turns the platter through one `turn(deg)` — one pointer (mouse / finger:
+angle round the centre), two pointers (touchscreen twist: the angle of the line between them; dropping to one finger
+carries on without a jump), a trackpad two-finger swipe (`wheel` with pixel deltas: 600 px = one turn, larger axis,
+positive = forwards; the swipe ends 160 ms after the last event, so momentum scrolling keeps the record turning; a
+pinch, `ctrlKey`, is ignored), while a mouse wheel notch (`deltaMode` ≠ 0 or a whole ±100+ delta) steps one beat.
+Spinback: turning backwards faster than 1080°/s (over the last 120 ms) calls `live.onFling` instead of `onCommit` —
+on release for pointers, at once during a swipe (the rest of that swipe is then ignored). `AutoDJ.spinBack()` plays `Deck.rewind` from the
 held position (`from` param, the deck is already stopped) and starts the cued song `REWIND_LEAD` later on its
 landing entry (`resolveEntry`: its drop, through its dialogue if marked; its staff tempo). The old deck is freed and
 the next song planned once the spinback has played out. Without a cued song it just plays on (`releaseDeck`).
@@ -518,6 +559,10 @@ device, and starts `next start -p 3100` (build first). Audio runs for real; noth
   blend into an echo-out or cut (beyond ±8% sync).
 - The track view's waveform shows bass vs the rest, not rekordbox-style three-band colour, and is built at 11 kHz
   (no detail above ~5 kHz). A song's first appearance shows bar blocks for a moment while it is prepared.
+- While a loop plays, the track view still draws the song ahead as it would play without the loop. Loops end at
+  the song's end at the latest; a tempo glide under way freezes at its current rate while looping.
+- Playing together keeps the new song's bass off until the swap; there's no control over its level while both play.
+  Two songs in clashing keys can sound rough together (Layer still refuses those; ▶ Play now doesn't).
 - Cue pads only jump the song on air between beats of its own grid, so a wrong beat grid makes the jump land off
   the beat (fix the grid in the track editor). A pad saved on a session-only file is lost with the file.
 - Spinback is a fixed recipe (0.9 s, reversed audio speeding up), not a physical spin-down; it needs a cued song.

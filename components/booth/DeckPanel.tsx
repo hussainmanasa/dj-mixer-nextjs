@@ -143,7 +143,7 @@ export function DeckPanel({
     const view = snap?.decks[deck] ?? null;
     let label = ROLE_LABEL[role];
     if (snap?.mix && snap.now >= snap.mix.start) {
-      if (role === "incoming") label = snap.layering ? "Layered" : "Mixing in";
+      if (role === "incoming") label = snap.layering ? (useSession.getState().status.next?.together ? "Playing along" : "Layered") : "Mixing in";
       if (role === "live" && !snap.layering) label = "Mixing out";
     }
     if (transport?.thisPaused) label = holding ? "Scratch" : "Paused";
@@ -481,6 +481,10 @@ export function DeckPanel({
         )}
       </div>
 
+      {role === "live" && transport && a && (
+        <LoopButtons deck={deck} disabled={mixing || transport.thisPaused || inDialogue} />
+      )}
+
       {liveTrack && a && (role === "live" || role === "incoming" || role === "loaded") && (
         <CuePads
           deck={deck}
@@ -561,5 +565,52 @@ function TransportButton({
     >
       {label}
     </button>
+  );
+}
+
+const LOOP_BEATS = [0.25, 0.5, 1, 2, 4, 8, 16];
+const LOOP_LABEL: Record<number, string> = { 0.25: "¼", 0.5: "½" };
+
+/**
+ * Beat loops on the song on air: ¼ to 16 beats, starting on the beat it's in.
+ * The lit length is the loop playing; press it again (or Exit) to let the song
+ * carry on. The auto-DJ's next mix waits until the loop ends.
+ */
+function LoopButtons({ deck, disabled }: { deck: number; disabled: boolean }) {
+  const loop = useSession((s) => (s.status.loop?.deck === deck ? s.status.loop : null));
+  const setLoop = useSession((s) => s.loop);
+  const exitLoop = useSession((s) => s.exitLoop);
+  const letter = DECK_LETTERS[deck];
+  return (
+    <div className="mt-3" role="group" aria-label={`Loop, Deck ${letter}`}>
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-xs uppercase tracking-wider text-muted">Loop · beats</span>
+        {loop && (
+          <button type="button" className="rounded border border-warn px-2 py-0.5 text-[11px] font-semibold text-warn" onClick={() => exitLoop(deck)}>
+            Exit loop
+          </button>
+        )}
+      </div>
+      <div className="grid grid-cols-7 gap-1.5">
+        {LOOP_BEATS.map((b) => {
+          const on = loop?.beats === b;
+          return (
+            <button
+              key={b}
+              type="button"
+              disabled={disabled && !on}
+              aria-pressed={on}
+              aria-label={`Loop ${b} beat${b === 1 ? "" : "s"}, Deck ${letter}`}
+              title={on ? "Let the loop go" : `Loop ${b} beat${b === 1 ? "" : "s"} from this beat`}
+              onClick={() => setLoop(deck, b)}
+              className="h-10 rounded-lg border font-mono text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-40"
+              style={on ? { borderColor: "#fbbf24", background: "#fbbf24", color: "#07070b" } : { borderColor: "var(--border)", background: "var(--surface-2)" }}
+            >
+              {LOOP_LABEL[b] ?? b}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }

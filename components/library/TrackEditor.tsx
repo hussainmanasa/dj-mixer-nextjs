@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { drops, FULL_LEVEL } from "@/lib/analysis/structure";
 import { dialogueOf, hookOf, snapToBar, validateCues } from "@/lib/dj/cues";
+import { MarkerWaveform } from "./MarkerWaveform";
 import { barSeconds, dropCue } from "@/lib/dj/mixpoints";
 import type { GridPreview } from "@/lib/library/preview";
 import type { Track, TrackCues, TrackFlag } from "@/lib/types";
@@ -245,8 +246,19 @@ function CueSection({ track }: { track: Track }) {
   return (
     <Section
       title="Song markers"
-      hint="Play the song and press Mark at the right moment. The dialogue plays before the song drops in (Drop and Desi Night); the hook is what Desi Night opens with. Hook and default start snap to the beat."
+      hint="Drag a marker's handle on the waveform, or click to put the cursor there (and listen) and press Set here — or play the song and press Mark now. The dialogue plays before the song drops in (Drop and Desi Night); the hook is what Desi Night opens with. Hook and default start snap to the bar."
     >
+      <MarkerWaveform
+        track={track}
+        onSet={(key, seconds) => void setCues(track.id, { [key]: seconds })}
+        onListen={(from) => void playFrom(from)}
+        playhead={() => {
+          // Only this editor's previews (not a booth Cue or a picker preview playing another song).
+          const p = usePreviewStore.getState();
+          return p.playing && !/^(cue|pick):/.test(p.playing) ? p.position() : null;
+        }}
+        canListen={!boothPlaying && !preview.loading}
+      />
       <div className="flex flex-wrap items-center gap-2">
         {places.map(([label, at]) => (
           <button key={label} type="button" className="btn" disabled={boothPlaying || preview.loading || at === undefined} onClick={() => playFrom(at!)}>

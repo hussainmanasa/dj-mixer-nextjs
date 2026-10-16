@@ -29,7 +29,7 @@ export function deckStates(page: Page): Promise<string[]> {
   return page.$$eval('section[aria-label^="Deck"]', (els) =>
     els.map((e) => {
       const t = (e.textContent ?? "").replace(/\s+/g, " ");
-      const state = t.match(/(On air|Paused|Scratch|Cued|Mixing in|Mixing out|Standby|Empty)/)?.[0] ?? "";
+      const state = t.match(/(On air|Paused|Scratch|Cued|Mixing in|Playing along|Mixing out|Standby|Empty)/)?.[0] ?? "";
       return `${e.getAttribute("aria-label")?.slice(-1)}:${state} ${t.match(/\d+:\d\d \/ −\d+:\d\d/)?.[0] ?? ""} ${t.match(/Test Groove \w/)?.[0] ?? ""}`;
     }),
   );

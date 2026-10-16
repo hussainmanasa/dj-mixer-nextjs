@@ -162,6 +162,7 @@ export function Booth() {
         onPlay={play}
         onStop={stop}
       />
+      {status.playing && <AiDjSwitch on={status.auto} disabled={stopping} color={color} />}
       <DropButton status={status} live={live} color={color} />
       <LayerButton status={status} live={live} color={color} onPick={() => setPicker({ next: false, layer: true })} />
       <FxPad enabled={live && !!status.now} color={color} />
@@ -486,7 +487,15 @@ function NextMix({ status, color }: { status: AutoDJStatus; color: string }) {
       return;
     }
     if (snap.layering) {
-      setText(when.current, "layered · Drop to swap");
+      const together = status.next?.together;
+      setText(
+        when.current,
+        together
+          ? together.swapAt !== null && snap.now < together.swapAt
+            ? `together · mixes at its drop in ${formatTime(together.swapAt - snap.now)} · or Drop`
+            : "together · Drop to mix"
+          : "layered · Drop to swap",
+      );
       if (progress.current) progress.current.style.transform = "scaleX(0)";
     } else if (snap.now < mix.start) {
       // Desi Night: the song waits for Drop and only mixes by itself near its end.
@@ -517,7 +526,15 @@ function NextMix({ status, color }: { status: AutoDJStatus; color: string }) {
           </p>
           <p className="truncate text-sm text-muted">{status.next.track.artist || "Unknown artist"}</p>
           <p className="mt-2 flex justify-between gap-2 font-mono text-xs text-muted">
-            <span>{status.paused !== null ? "When you press ▶" : TRANSITION_LABEL[status.next.transition]}</span>
+            <span>
+              {status.paused !== null
+                ? "When you press ▶"
+                : status.loop
+                  ? "After the loop"
+                  : status.next.together
+                    ? "Playing together"
+                    : TRANSITION_LABEL[status.next.transition]}
+            </span>
             <span ref={when} className="tabular-nums" />
           </p>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-2">
@@ -584,6 +601,42 @@ function VolumeControl({ color, playing }: { color: string; playing: boolean }) 
       />
       <VolumeSlider label="Headphones" value={previewVolume} onChange={setPreviewVolume} color={color} />
     </section>
+  );
+}
+
+/**
+ * AI DJ mode. On: the auto-DJ mixes by itself. Off: it still cues the best next
+ * song but waits for Drop (or ▶ Play now); if nobody mixes, it comes in near the
+ * end of the song and switches back on, so the music never stops.
+ */
+function AiDjSwitch({ on, disabled, color }: { on: boolean; disabled: boolean; color: string }) {
+  const setAuto = useSession((s) => s.setAuto);
+  return (
+    <div className="flex w-56 flex-col items-center gap-1">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label="AI DJ"
+        disabled={disabled}
+        onClick={() => setAuto(!on)}
+        className="flex h-12 w-full items-center justify-between rounded-2xl border px-4 font-bold transition disabled:opacity-40"
+        style={on ? { borderColor: color, background: `color-mix(in srgb, ${color} 20%, var(--surface))` } : { borderColor: "var(--warn)", background: "color-mix(in srgb, var(--warn) 12%, var(--surface))" }}
+      >
+        <span>AI DJ</span>
+        <span
+          className="relative h-6 w-11 rounded-full transition"
+          style={{ background: on ? color : "var(--surface-2)" }}
+          aria-hidden
+        >
+          <span className="absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all" style={{ left: on ? "1.375rem" : "0.125rem" }} />
+        </span>
+        <span className="w-8 text-right text-sm" style={{ color: on ? color : "var(--warn)" }}>
+          {on ? "ON" : "OFF"}
+        </span>
+      </button>
+      {!on && <p className="text-center text-xs text-warn">You mix: Drop or ▶ Play now. Near the song&apos;s end the AI DJ takes over.</p>}
+    </div>
   );
 }
 

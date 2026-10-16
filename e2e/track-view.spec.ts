@@ -60,11 +60,11 @@ test("track view: the decks' songs one below another, with waveform, beats, bar 
   await page.getByRole("button", { name: "Zoom out" }).click();
   await expect(page.getByRole("region", { name: "Track view" })).toContainText("16 s");
 
-  // During a beat-matched mix both rows count the same beat.
+  // Playing together (beat-matched) both rows count the same beat.
   await page.getByRole("region", { name: "Deck B" }).getByRole("button", { name: "Play Deck B now" }).click();
-  await expect.poll(() => states(page), { timeout: 15_000 }).toMatch(/B:Mixing in/);
-  await expect(row(page, "A")).toContainText("Mixing out");
-  await expect(row(page, "B")).toContainText("Mixing in");
+  await expect.poll(() => states(page), { timeout: 15_000 }).toMatch(/B:Playing along/);
+  await expect(row(page, "A")).toContainText("On air");
+  await expect(row(page, "B")).toContainText("Playing along");
   let same = 0;
   for (let i = 0; i < 10; i++) {
     const [x, y] = await Promise.all([barOf(page, "A"), barOf(page, "B")]);
