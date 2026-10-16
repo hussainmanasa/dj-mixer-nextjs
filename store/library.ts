@@ -20,7 +20,7 @@ import {
   type Settings,
 } from "@/lib/library/store";
 import { getMood, resolveMoods } from "@/lib/dj/moods";
-import { MAX_DECKS, MIN_DECKS, type Mood, type MoodId, type Track, type TrackAnalysis, type TrackCues, type TrackFlag, type TrackOverrides } from "@/lib/types";
+import { HOT_CUES, MAX_DECKS, MIN_DECKS, type Mood, type MoodId, type Track, type TrackAnalysis, type TrackCues, type TrackFlag, type TrackOverrides } from "@/lib/types";
 
 export type FolderState = "none" | "needs-permission" | "ready";
 
@@ -58,6 +58,8 @@ interface LibraryState {
   setCrates: (id: string, crates: string[]) => Promise<void>;
   /** Save song markers; `null` clears one. */
   setCues: (id: string, cues: { [K in keyof TrackCues]?: number | null }) => Promise<void>;
+  /** Save (or clear, with null) hot cue `slot` (0–7) of a song, in track seconds. */
+  setHotCue: (id: string, slot: number, seconds: number | null) => Promise<void>;
   /**
    * Admin fixes. A new beat grid re-analyses the track on it (resolves when
    * done); drop sensitivity and key apply at once. `null` clears an override.
@@ -172,7 +174,9 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     try {
       // New tracks first, then ones analysed by an older version (they stay playable meanwhile).
       const all = Object.values(get().tracks);
-      const pendingIds = [...all.filter((t) => t.status === "pending"), ...all.filter(isStale)].map((t) => t.id);
+      // Folder by folder, as the Library's Folders view lists them.
+      const byPath = (x: Track, y: Track) => x.path.localeCompare(y.path, undefined, { numeric: true, sensitivity: "base" });
+      const pendingIds = [...all.filter((t) => t.status === "pending").sort(byPath), ...all.filter(isStale).sort(byPath)].map((t) => t.id);
       let done = 0;
       for (const id of pendingIds) {
         const track = get().tracks[id];
@@ -296,6 +300,15 @@ export const useLibrary = create<LibraryState>((set, get) => ({
         else cues[k] = Math.round(v * 1000) / 1000;
       }
       return { ...t, cues: Object.keys(cues).length ? cues : undefined };
+    });
+  },
+
+  async setHotCue(id, slot, seconds) {
+    if (slot < 0 || slot >= HOT_CUES) return;
+    await patchTrack(id, (t) => {
+      const pads = Array.from({ length: HOT_CUES }, (_, i) => t.hotCues?.[i] ?? null);
+      pads[slot] = seconds === null ? null : Math.round(seconds * 1000) / 1000;
+      return { ...t, hotCues: pads.some((p) => p !== null) ? pads : undefined };
     });
   },
 

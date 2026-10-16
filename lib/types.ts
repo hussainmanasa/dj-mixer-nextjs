@@ -128,6 +128,8 @@ export interface Track {
   crates?: string[];
   /** Song markers set by the admin (dialogue, hook, default start). */
   cues?: TrackCues;
+  /** Hot cues A–H (track seconds, on a beat), set from the booth's cue pads; null = empty pad. */
+  hotCues?: (number | null)[];
   status: TrackStatus;
   error?: string;
   addedAt: number;
@@ -182,6 +184,9 @@ export interface SetLogEntry {
 }
 
 export const SUPPORTED_EXTENSIONS = [".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".oga", ".opus"] as const;
+
+/** Cue pads per deck (hot cues A–H). */
+export const HOT_CUES = 8;
 
 export const MIN_DECKS = 2;
 export const MAX_DECKS = 4;

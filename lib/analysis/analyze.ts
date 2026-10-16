@@ -4,11 +4,12 @@
 
 import type { TrackAnalysis } from "@/lib/types";
 import { ANALYSIS_SAMPLE_RATE, type ForcedGrid } from "./bpm";
-import type { AnalyzeRequest, AnalyzeResponse } from "./analyze.worker";
+import type { AnalyzeRequest, AnalyzeResponse, WaveformRequest } from "./analyze.worker";
+import type { Waveform } from "./waveform";
 
 let worker: Worker | null = null;
 let seq = 0;
-const pending = new Map<string, { resolve: (a: TrackAnalysis) => void; reject: (e: Error) => void }>();
+const pending = new Map<string, { resolve: (msg: AnalyzeResponse & { ok: true }) => void; reject: (e: Error) => void }>();
 
 function getWorker(): Worker {
   if (!worker) {
@@ -18,7 +19,7 @@ function getWorker(): Worker {
       const p = pending.get(msg.id);
       if (!p) return;
       pending.delete(msg.id);
-      if (msg.ok) p.resolve(msg.analysis);
+      if (msg.ok) p.resolve(msg);
       else p.reject(new Error(msg.error));
     };
     worker.onerror = (event) => {
@@ -46,8 +47,22 @@ export async function analyzeFile(file: Blob, tagBpm: number | null, forced: For
   const id = `a${++seq}`;
   const w = getWorker();
   return new Promise<TrackAnalysis>((resolve, reject) => {
-    pending.set(id, { resolve, reject });
+    pending.set(id, { resolve: (msg) => ("analysis" in msg ? resolve(msg.analysis) : reject(new Error("Unexpected reply"))), reject });
     const req: AnalyzeRequest = { id, channels, sampleRate: buffer.sampleRate, tagBpm, forced };
+    w.postMessage(req, channels.map((c) => c.buffer));
+  });
+}
+
+/** A song's detailed waveform (see waveform.ts), computed in the analysis worker from a file decoded at 11 kHz. */
+export async function waveformOf(file: Blob): Promise<Waveform> {
+  const buffer = await decodeForAnalysis(file);
+  const channels: Float32Array[] = [];
+  for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c).slice());
+  const id = `w${++seq}`;
+  const w = getWorker();
+  return new Promise<Waveform>((resolve, reject) => {
+    pending.set(id, { resolve: (msg) => ("wave" in msg ? resolve(msg.wave) : reject(new Error("Unexpected reply"))), reject });
+    const req: WaveformRequest = { kind: "waveform", id, channels, sampleRate: buffer.sampleRate };
     w.postMessage(req, channels.map((c) => c.buffer));
   });
 }

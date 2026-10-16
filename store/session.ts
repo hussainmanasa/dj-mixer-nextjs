@@ -57,6 +57,10 @@ interface SessionState {
   spinBack: (deck: number, position: number) => void;
   /** A deck's tempo slider (playback rate). */
   setDeckTempo: (deck: number, rate: number) => void;
+  /** Sync: this deck's BPM to the other deck's. */
+  syncDeck: (deck: number) => void;
+  /** A cue pad on the song on air: jump there on the next beat (paused: move the paused spot). */
+  jumpTo: (deck: number, position: number) => void;
   /** Fire an effect on the whole mix, on the next beat. */
   fx: (kind: FxKind) => void;
   /** Staff request: `next` replaces the cued track, otherwise it joins the queue. */
@@ -253,6 +257,16 @@ export const useSession = create<SessionState>((set, get) => ({
   setDeckTempo(deck, rate) {
     if (!dj || get().stopping) return;
     dj.setDeckTempo(deck, rate);
+  },
+
+  syncDeck(deck) {
+    if (!dj || get().stopping) return;
+    dj.syncDeck(deck);
+  },
+
+  jumpTo(deck, position) {
+    if (!dj || get().stopping) return;
+    dj.jumpTo(deck, position);
   },
 
   scratch(track, position, step) {

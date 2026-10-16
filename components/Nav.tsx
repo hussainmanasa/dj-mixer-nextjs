@@ -5,6 +5,7 @@ const LINKS = [
   { href: "/library", label: "Library" },
   { href: "/moods", label: "Moods" },
   { href: "/history", label: "History" },
+  { href: "/help", label: "Help" },
 ] as const;
 
 export function Nav({ active }: { active: (typeof LINKS)[number]["href"] }) {

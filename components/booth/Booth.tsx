@@ -11,6 +11,7 @@ import type { Track, TransitionKind } from "@/lib/types";
 import { previewIsSeparate, readyTracks, useLibrary, useMoods } from "@/store/library";
 import { useSession } from "@/store/session";
 import { DeckPanel, type DeckRole } from "./DeckPanel";
+import { TrackStack, type StackRow } from "./TrackStack";
 import { formatTime, setText, useBoothFrame } from "./frame";
 import { FxPad } from "./FxPad";
 import { TrackPicker } from "./TrackPicker";
@@ -80,6 +81,19 @@ export function Booth() {
   // Paused: Drop, Layer and effects wait for ▶.
   const live = status.playing && !stopping && status.paused === null;
   const deckCount = status.playing ? status.deckCount : settingsDecks;
+  // Where a song loaded before Play starts: Deck A where the set starts, the others where they'll come in.
+  const preloadStart = (i: number, p: NonNullable<(typeof preloads)[number]>) =>
+    i === 0 ? firstStart(p.track, p.entry, !!mood.opener).start : ((e) => e.dialogue?.start ?? e.land)(resolveEntry(p.track, p.entry));
+  // Track view: the decks' songs one below another (loaded ones before Play; on air and cued during the set).
+  const stackRows: StackRow[] = Array.from({ length: deckCount }, (_, i): StackRow | null => {
+    if (!status.playing && !starting) {
+      const p = preloads[i];
+      return p ? { deck: i, track: p.track, role: "loaded", startAt: preloadStart(i, p) } : null;
+    }
+    const { role, track } = deckRole(status, i);
+    if (!track || (role !== "live" && role !== "incoming")) return null;
+    return { deck: i, track, role, startAt: role === "incoming" ? status.next?.startAt : undefined };
+  }).filter((r): r is StackRow => r !== null);
   const decks = Array.from({ length: deckCount }, (_, i) => {
     // Before Play, staff can load a song into any deck (Deck A plays first, the rest next in order).
     const preload = !status.playing && !starting ? (preloads[i] ?? null) : null;
@@ -98,10 +112,7 @@ export function Booth() {
               ? {
                   choice: preload.entry,
                   // Deck A: where the set starts. Later decks: where they'll come in (before any build-up).
-                  startAt:
-                    i === 0
-                      ? firstStart(preload.track, preload.entry, !!mood.opener).start
-                      : ((e) => e.dialogue?.start ?? e.land)(resolveEntry(preload.track, preload.entry)),
+                  startAt: preloadStart(i, preload),
                   set: (choice) => setPreloadEntry(i, choice),
                 }
               : undefined
@@ -226,6 +237,8 @@ export function Booth() {
           })}
         </div>
       </section>
+
+      <TrackStack rows={stackRows} color={color} />
 
       {deckCount === 2 ? (
         <div className="grid items-start gap-6 lg:grid-cols-[1fr_minmax(15rem,18rem)_1fr]">

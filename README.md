@@ -42,10 +42,17 @@ Open http://localhost:3000, then:
    for a **spinback**: the song spins back and the cued song drops in.
    **Tempo slider** beside each playing / cued deck's wheel (±8%): on the song on air it changes the tempo at once
    (the auto-DJ re-times the next mix); on the cued song it's the tempo it settles at after its mix. Double-click
-   it, or press its % button, to go back to the song's own tempo. The wheel's centre shows the song's cover art. ▶ **Play now** on the cued deck mixes it in on the
+   it, or press its % button, to go back to the song's own tempo. **Sync** under it sets that deck to the other deck's BPM. **Cue pads A–H**
+   on each deck: an empty pad saves the spot, a set pad jumps there on the beat (on a cued deck it sets the start);
+   Shift-click or Clear empties one. The wheel's centre shows the song's cover art. ▶ **Play now** on the cued deck mixes it in on the
    next phrase. The auto-DJ keeps running throughout — no need to press Stop.
+   **Track view** above the decks shows the songs one below another: a scrolling waveform with the beat grid,
+   bar numbers, phrases, drops, cue pads and the mix point, plus BPM, key, time, bar/beat and phrase — during a
+   mix you can watch both songs' beats line up.
    **Volume** under the level meter has two sliders: **Club speakers** (the mix) and **Headphones** (Cue and
    previews). Both are saved and also sit under each output in Library → Audio outputs.
+
+The **Help** page in the app (`/help`) explains every control in plain words for booth staff and the venue admin.
 
 ## Running at a venue
 
@@ -68,7 +75,8 @@ the venue's public performance licences current (in India, for example, PPL and 
 
 ## Admin
 
-- **Library** — folder, analysis, deck count and key lock (beta). Every setting applies straight away, also
+- **Library** — folder, analysis, deck count and key lock (beta). The track table shows your music folder as it is
+  (folders and subfolders that open and close, with song counts and analysis progress; or a plain List). Every setting applies straight away, also
   during a set and from another browser tab — no refresh or Stop needed. The track table flags problems
   (*Needs attention*); **Edit** a track to mark it *Favourite* / *Never play*, add it to crates, fix its beat grid
   (listen with clicks), its drop detection or its key.

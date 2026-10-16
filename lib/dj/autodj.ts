@@ -125,6 +125,8 @@ export interface AutoDJStatus {
 export interface DeckView {
   /** False while the deck is cued for a scheduled start. */
   started: boolean;
+  /** Context time (as heard) the deck starts or started playing. */
+  startsAt: number;
   /** Track position (s). */
   position: number;
   /** Current playback rate (1 = native tempo). */
@@ -697,6 +699,60 @@ export class AutoDJ {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Sync: set one deck's tempo so its BPM matches the other's — the song on
+   * air to the cued song's tempo (after its mix), or the cued song to the song
+   * on air's current tempo. Half / double tempo counts (a 64 BPM ballad syncs
+   * to 128). False when they're more than 8% apart, or there's no other song.
+   */
+  syncDeck(index: number): boolean {
+    const cur = this.current;
+    const p = this.planned;
+    const a = cur?.track.analysis;
+    const b = p?.track.analysis;
+    if (!this.playing || !cur || !p || !a || !b) return false;
+    const liveRate = this.paused?.deck === cur.deck ? this.paused.rate : (cur.deck.timeline?.rateAt(this.engine.now) ?? 1);
+    if (index === cur.deck.index) {
+      const target = b.bpm * (p.tempo ?? 1);
+      const m = syncRatio(target, a.bpm, true);
+      return m !== null && this.setDeckTempo(index, target / (a.bpm * m));
+    }
+    if (index === p.deck.index) {
+      const liveBpm = a.bpm * liveRate;
+      const m = syncRatio(liveBpm, b.bpm, true);
+      return m !== null && this.setDeckTempo(index, liveBpm / (b.bpm * m));
+    }
+    return false;
+  }
+
+  /**
+   * A cue pad on the song on air: jump to track position `to` on its next beat
+   * (the groove carries on in time) and re-time the cued mix. Paused, it moves
+   * the paused spot. Refused while its mix is under way or about to start, and
+   * while it's still in a dialogue.
+   */
+  jumpTo(index: number, to: number): boolean {
+    const cur = this.current;
+    const a = cur?.track.analysis;
+    if (!this.playing || !cur || !a || cur.deck.index !== index || this.recovering) return false;
+    if (this.paused) return this.movePaused(to);
+    const p = this.planned;
+    const now = this.engine.now;
+    if (p && !p.held && p.plan.start <= now + SCHEDULE_MARGIN + 1) return false;
+    const tl = cur.deck.timeline;
+    if (!tl || cur.deck.pendingJump() !== null) return false;
+    const at = tl.timeAt(nextBoundary(a, tl.positionAt(now + 0.08), 1 / BEATS_PER_BAR));
+    if (!cur.deck.jumpAt(at, Math.max(0, Math.min(a.duration - 1, to)))) return false;
+    // The mix point moved with the song: plan the cued mix again from the new position.
+    if (p && !p.held && !p.layer) {
+      this.dropRequested = p.staffDrop;
+      const up = this.unplan();
+      if (up) this.schedule(up.track, up.buffer, up.requested, up.entry, { deferred: up.deferred, tempo: up.tempo });
+    }
+    this.emit();
+    return true;
   }
 
   /** Re-plan the cued mix (its times and tempo) once a tempo slider has rested for 300 ms. */
@@ -1462,6 +1518,7 @@ export class AutoDJ {
         d.track && d.timeline
           ? {
               started: now >= d.timeline.startTime,
+              startsAt: d.timeline.startTime,
               // A paused deck stands still where it stopped.
               position: this.paused?.deck === d ? this.paused.position : d.timeline.positionAt(now),
               rate: this.paused?.deck === d ? this.paused.rate : d.timeline.rateAt(now),

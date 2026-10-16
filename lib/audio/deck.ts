@@ -37,6 +37,8 @@ export class Deck {
   private route: GainNode;
 
   private source: AudioBufferSourceNode | null = null;
+  /** The gain the current source plays through (faded across a hot-cue jump). */
+  private sourceGain: GainNode | null = null;
   /** Before a scheduled jump: the source playing the part up to the jump (e.g. a dialogue). */
   private preJump: AudioBufferSourceNode | null = null;
   /** A scheduled rewind (spinback). */
@@ -161,11 +163,7 @@ export class Deck {
 
     const src = new AudioBufferSourceNode(this.ctx, { buffer: this.buffer });
     src.playbackRate.setValueAtTime(rate, at);
-    src.onended = () => {
-      if (this.source !== src) return;
-      this.source = null;
-      if (!this.stopping) this.onUnexpectedEnd?.(this);
-    };
+    this.watchEnd(src);
 
     if (jump && jump.at > when) {
       // Up to the jump: the pre-jump part, faded out across the cut.
@@ -186,13 +184,64 @@ export class Deck {
       src.connect(mainGain).connect(this.trim);
       src.start(jump.at - JUMP_XFADE / 2, Math.max(0, jump.to - (JUMP_XFADE / 2) * rate));
       this.timeline = new PlaybackTimeline(when, offset, rate, null, jump);
+      this.sourceGain = mainGain;
     } else {
-      src.connect(this.trim);
+      const gain = new GainNode(this.ctx, { gain: 1 });
+      src.connect(gain).connect(this.trim);
       src.start(when, offset);
       this.timeline = new PlaybackTimeline(when, offset, rate);
+      this.sourceGain = gain;
     }
     this.source = src;
     this.stopping = false;
+  }
+
+  private watchEnd(src: AudioBufferSourceNode): void {
+    src.onended = () => {
+      if (this.source !== src) return;
+      this.source = null;
+      if (!this.stopping) this.onUnexpectedEnd?.(this);
+    };
+  }
+
+  /**
+   * Hot cue: while playing, jump to track position `to` at context time `at`
+   * (on a beat), crossfading 10 ms on the audio clock. The tempo holds across
+   * the jump; a glide still under way carries on after it. False while a jump
+   * (a dialogue) is still to come.
+   */
+  jumpAt(at: number, to: number): boolean {
+    const src = this.source;
+    const gain = this.sourceGain;
+    const tl = this.timeline;
+    const buffer = this.buffer;
+    const now = this.ctx.currentTime;
+    // Not while a dialogue's jump is still to come (a timeline holds one jump).
+    if (!src || !gain || !tl || !buffer || at <= now || (tl.jump && tl.jump.at > now)) return false;
+    // A dialogue's jump that has happened left its first part stopped: nothing to keep.
+    this.preJump = null;
+    const glide = tl.ramp && tl.ramp.t1 > now ? tl.ramp : null;
+    src.playbackRate.cancelAndHoldAtTime(now);
+    this.pitch?.cancelAndHoldAtTime(now);
+    const base = rebaseTimeline(tl, now);
+    const rate = base.rate;
+    gain.gain.setValueAtTime(1, at - JUMP_XFADE / 2);
+    gain.gain.linearRampToValueAtTime(0, at + JUMP_XFADE / 2);
+    src.stop(at + JUMP_XFADE);
+    src.onended = () => gain.disconnect();
+    const next = new AudioBufferSourceNode(this.ctx, { buffer });
+    next.playbackRate.setValueAtTime(rate, now);
+    const nextGain = new GainNode(this.ctx, { gain: 0 });
+    nextGain.gain.setValueAtTime(0, at - JUMP_XFADE / 2);
+    nextGain.gain.linearRampToValueAtTime(1, at + JUMP_XFADE / 2);
+    next.connect(nextGain).connect(this.trim);
+    next.start(at - JUMP_XFADE / 2, Math.max(0, to - (JUMP_XFADE / 2) * rate));
+    this.watchEnd(next);
+    this.source = next;
+    this.sourceGain = nextGain;
+    this.timeline = new PlaybackTimeline(now, base.startOffset, rate, null, { at, to });
+    if (glide) this.rampRate(at, at + (glide.t1 - now), glide.r1);
+    return true;
   }
 
   /** Ramp playback rate linearly between two context times (for tempo hand-back). */
@@ -263,6 +312,8 @@ export class Deck {
       this.source.disconnect();
       this.source = null;
     }
+    this.sourceGain?.disconnect();
+    this.sourceGain = null;
     this.timeline = null;
   }
 

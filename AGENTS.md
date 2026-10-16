@@ -40,7 +40,9 @@ Full product plan: https://claude.ai/code/artifact/903692c7-9f12-49a9-9de1-5a82b
    the paused spot. Not during a mix (it would throw both songs out of time).
    From 15 Oct 2026 (owner): a **tempo slider on the on-air and cued decks** (±8%, through `AutoDJ.setDeckTempo`,
    which re-times the next mix), a **spinback** (flick the on-air jog backwards fast: the song spins back and the
-   cued song drops in), and the song's **cover art** on the jog wheel.
+   cued song drops in), and the song's **cover art** on the jog wheel. Also a **Sync** button per deck (one press
+   sets its BPM to the other deck's, through `setDeckTempo`) and **8 cue pads** (hot cues A–H) per deck. While the
+   set is paused, jog wheels are silent (no scratch over a deliberate silence).
    Every action goes through `AutoDJ`: it still beat-matches, chooses the transition, times it on the grid
    and steers back to the mood. Do not add manual decks, crossfader, per-deck EQ/faders, skip/seek or an
    energy slider, and never let UI write to deck automation directly.
@@ -66,6 +68,7 @@ app/
   (admin)/library/page.tsx    music folder, analysis, deck count, key lock, track table + editor
   (admin)/moods/page.tsx      mood editor (presets + admin edits)
   (admin)/history/page.tsx    set log by night, CSV export
+  (admin)/help/page.tsx       user guide (components/help/Guide.tsx), linked from the nav as "Help"
   manifest.ts                 PWA manifest (kiosk install)
   icon.svg · apple-icon.png · favicon.ico   tab / home-screen icon (a record in the accent colours), drawn by
                               scripts/make-icons.mjs with public/icons/* for the manifest
@@ -84,9 +87,10 @@ lib/
     loudness.ts               PURE: BS.1770-style integrated loudness, library target, trim
     keydetect.ts · fft.ts     PURE: key from audio (chromagram × Krumhansl–Kessler profiles)
     suggest.ts                PURE: suggested hook (repetition) and dialogue (speech before the beat)
+    waveform.ts               PURE: 100 bins/s of peak and bass (< 200 Hz) for the track view
     key.ts                    PURE: key tag → Camelot, harmonic compatibility
     analyze.ts                client: decode at 11 025 Hz → worker
-    analyze.worker.ts         Web Worker running bpm.ts
+    analyze.worker.ts         Web Worker running bpm.ts and waveform.ts (one worker: see "Track view")
   dj/
     moods.ts                  PURE: mood presets + energy target curve
     selector.ts               PURE: score/rank tracks, choose transition type
@@ -108,7 +112,9 @@ lib/
     scan.ts                   client: folder walk, content hash ids, tag reading
     store.ts                  client: IndexedDB persistence (idb-keyval): tracks, settings, session, set log
     setlog.ts · issues.ts     PURE: nights + CSV for licence reports; library health checks
+    folders.ts                PURE: the music folder as a tree (subfolders, songs, ready / analysing counts)
     preview.ts                client: the shared preview player (editor, booth Cue, picker) on the preview output
+    waveform.ts               client: a song's detailed waveform for the track view, cached in IndexedDB (`wave:<id>`)
     artwork.ts                client: cover art from tags → 320 px WebP thumbnail, cached in IndexedDB (`art:<id>`)
 store/
   library.ts                  zustand: tracks, folder, settings, analysis queue
@@ -202,6 +208,12 @@ out the playing, cued and already-queued tracks.
 Offline: `public/sw.js` caches `/_next/static` (cache-first), pages and RSC (network-first) and other assets
 (stale-while-revalidate); registered only in production. `experimental.useOffline` powers the banner. A
 reload or reboot works offline for any page opened before; in-app navigation waits until the network is back.
+
+Library track table: **Folders** view (default) mirrors the music folder (`folderTree` from `Track.path`): folder
+rows open and close, each with its song count and — while analysing — how many are left and a progress bar (counts
+include subfolders). Folders start closed except "Added this session" (session-only files); a search, filter or crate
+opens every folder with a match; Expand all / Collapse all; **List** view is the old flat list. Analysis runs folder
+by folder (pending tracks sorted by path).
 
 Library admin: never-play / favourite flags (`selector.playable`, `WEIGHTS.favourite`), crates (moods can be
 limited to crates; empty crates fall back to the whole library), "Needs attention" (`issues.ts`), and per-track
@@ -350,6 +362,33 @@ double-click or the % button resets; BPM and "tempo ±x%" now sit under the titl
 The slider shows the live rate every frame (the auto-DJ's sync and glides move it), the cued song's target before
 its mix.
 
+Track view (`components/booth/TrackStack.tsx`, above the decks): one row per deck song — loaded decks before Play,
+the on-air and cued decks during the set — with details, a canvas waveform drawn every frame and a beat block
+(beat dots, bar.beat, phrase, mix / start / drop countdowns). The waveform (`lib/analysis/waveform.ts`: per 10 ms,
+the loudest sample and the loudest bass, scaled to the track's 99th-percentile peak) is built the first time a song
+is shown — decoded at 11 kHz and computed in the analysis worker (`waveformOf` in analyze.ts) — and cached as
+`wave:<id>` (~30 KB); until then the row draws `barLevels`. Each row maps room time to track time through its
+deck's rate (`x = (t − pos) / rate`), so beat-matched decks share one beat spacing; a cued deck's position before
+its start is extrapolated from `DeckView.startsAt`, so it scrolls in. Drawn on top: drops (shaded), beats / bars
+(numbered) / 8-bar phrases (mood colour), cue pads, the live deck's mix-out (`snapshot.mixOutPosition`, "MIX") and
+the cued / loaded start ("IN"). Zoom: 4–32 s across. Workers: a second `new Worker(new URL(…))` was handed the
+analysis worker's entry by the production bundler, so all CPU work shares `analyze.worker.ts` (messages carry
+`kind`).
+
+Sync (`AutoDJ.syncDeck(i)`, button under each tempo slider): the song on air takes the cued song's tempo after its
+mix (`b.bpm × Planned.tempo`), the cued song takes the song on air's current BPM; `syncRatio(…, true)` allows half
+/ double tempo and refuses beyond ±8%. One-shot (not a lock); the button lights while the BPMs match (frame loop).
+
+Cue pads (`components/booth/CuePads.tsx`, on loaded, cued and on-air decks): `Track.hotCues` (8 slots, track
+seconds snapped to a beat; `useLibrary.setHotCue`, persisted and synced like any track edit; `DeckPanel` reads the
+library's copy of the track since the deck's copy is a snapshot). An empty pad saves the deck's spot (on air: the
+snapshot position; paused: the paused spot; loaded / cued: the cue playhead if cueing, else the start point). A set
+pad: on air `AutoDJ.jumpTo(i, to)` → `Deck.jumpAt(at, to)` on the next beat — a second source with a 10 ms
+crossfade on the audio clock, tempo held (a glide under way carries on after), the timeline rebased with the jump —
+then the cued mix is re-planned; paused, `movePaused`; loaded / cued, a bar entry. Refused during the mix (or
+within `SCHEDULE_MARGIN` + 1 s of it) and while a dialogue's jump is still to come. The overview marks set pads.
+Every source now plays through its own gain (`Deck.sourceGain`) so it can be faded at a jump.
+
 Spinback: in `JogWheel`, letting go of the on-air wheel while it turns backwards faster than 1080°/s (measured
 over the last 120 ms) calls `live.onFling` instead of `onCommit`. `AutoDJ.spinBack()` plays `Deck.rewind` from the
 held position (`from` param, the deck is already stopped) and starts the cued song `REWIND_LEAD` later on its
@@ -421,6 +460,9 @@ the music plays (seen with synthetic kick-only tracks).
 - Styling: Tailwind CSS v4 with the dark tokens in `app/globals.css`; `.btn` and `.btn-primary` for buttons.
   The booth must stay readable on a dim screen from a distance: big targets, high contrast.
 - Tune selection by changing `WEIGHTS` / thresholds in `selector.ts` and update the tests with the intent.
+- The in-app guide (`components/help/Guide.tsx`, `/help`) is for staff and the venue admin: when you add or change
+  something they see or do, update its section there (plain words, the labels as they appear on screen) as well as
+  the README.
 
 ## Commands
 
@@ -474,6 +516,10 @@ device, and starts `next start -p 3100` (build first). Audio runs for real; noth
 - The tempo slider isn't on decks loaded before Play (they start at their own tempo), and a cued song with a
   dialogue plays its dialogue at its own tempo. Moving the on-air tempo far from the cued song's can turn a planned
   blend into an echo-out or cut (beyond ±8% sync).
+- The track view's waveform shows bass vs the rest, not rekordbox-style three-band colour, and is built at 11 kHz
+  (no detail above ~5 kHz). A song's first appearance shows bar blocks for a moment while it is prepared.
+- Cue pads only jump the song on air between beats of its own grid, so a wrong beat grid makes the jump land off
+  the beat (fix the grid in the track editor). A pad saved on a session-only file is lost with the file.
 - Spinback is a fixed recipe (0.9 s, reversed audio speeding up), not a physical spin-down; it needs a cued song.
 - Cover art is read from tags only (no online lookup); WAVs rarely carry it.
 - Scratching the song on air uses the scratch worklet (no key-lock, no volume matching), so it can sound a little

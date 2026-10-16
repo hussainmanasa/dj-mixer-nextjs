@@ -14,6 +14,8 @@ import { JogWheel, type JogScrub } from "./JogWheel";
 import { DECK_LETTERS } from "./theme";
 import { TrackOverview } from "./TrackOverview";
 import { useArtwork } from "./useArtwork";
+import { CuePads } from "./CuePads";
+import { syncRatio } from "@/lib/dj/selector";
 
 /** `loaded`: staff loaded a song before Play. */
 export type DeckRole = "live" | "incoming" | "standby" | "idle" | "loaded";
@@ -101,6 +103,24 @@ export function DeckPanel({
   const grabDeck = useSession((s) => s.grabDeck);
   const releaseDeck = useSession((s) => s.releaseDeck);
   const holding = useSession((s) => s.status.holding);
+  const syncDeck = useSession((s) => s.syncDeck);
+  const jumpTo = useSession((s) => s.jumpTo);
+  const syncButton = useRef<HTMLButtonElement>(null);
+  // The other deck's song for Sync: the cued one for the song on air, and the other way round.
+  const otherBpm = useSession((s) =>
+    role === "live" && s.status.next?.track.analysis
+      ? s.status.next.track.analysis.bpm * (s.status.next.tempo ?? 1)
+      : role === "incoming" && s.status.now
+        ? s.status.now.bpm
+        : null,
+  );
+  // The song as the library has it now (cue pads change while it plays; `track` is the deck's copy).
+  const liveTrack = useLibrary((s) => (track ? s.tracks[track.id] : undefined)) ?? track;
+  /** While the set is paused the club must stay silent: jog wheels move without a scratch. */
+  const quiet = () => {
+    const st = useSession.getState().status;
+    return st.paused !== null && !st.holding;
+  };
   const spinBack = useSession((s) => s.spinBack);
   const setDeckTempo = useSession((s) => s.setDeckTempo);
   const tempoInput = useRef<HTMLInputElement>(null);
@@ -169,6 +189,17 @@ export function DeckPanel({
     const input = tempoInput.current;
     if (input && document.activeElement !== input) input.value = shownPct.toFixed(1);
     setText(tempoValue.current, `${shownPct > 0 ? "+" : ""}${shownPct.toFixed(1)}%`);
+    // Sync lights up while both decks are at the same BPM (or half / double).
+    const st = useSession.getState().status;
+    const otherBpm =
+      role === "live" && st.next?.track.analysis
+        ? st.next.track.analysis.bpm * (st.next.tempo ?? 1)
+        : role === "incoming" && st.now?.track.analysis
+          ? st.now.track.analysis.bpm * (snap?.decks[st.now.deck]?.rate ?? 1)
+          : null;
+    const myBpm = a ? a.bpm * shown : null;
+    const matched = otherBpm !== null && myBpm !== null && [1, 2, 0.5].some((m) => Math.abs(myBpm * m - otherBpm) < 0.06);
+    syncButton.current?.setAttribute("data-on", String(matched));
     setText(time.current, a ? `${formatTime(view?.position ?? 0)} / −${formatTime(a.duration - (view?.position ?? 0))}` : "");
     if (fader.current) fader.current.style.transform = `scaleY(${view ? view.fader : 0})`;
     if (bass.current) {
@@ -197,7 +228,9 @@ export function DeckPanel({
               spinBack(deck, pos);
             },
           },
-          onMove: (pos, step) => scratchAt(track, pos, step),
+          onMove: (pos, step) => {
+            if (!quiet()) scratchAt(track, pos, step);
+          },
           onCommit: (pos) => {
             scratchEnd();
             releaseDeck(deck, pos);
@@ -222,7 +255,7 @@ export function DeckPanel({
               scratch.current = { resumeCue: preview.playing === cueTag };
               if (preview.playing) preview.stop();
             }
-            scratchAt(track, pos, step);
+            if (!quiet()) scratchAt(track, pos, step);
           },
           onCommit: (pos) => {
             const bar = beatBar(a, pos);
@@ -312,6 +345,20 @@ export function DeckPanel({
               title="Back to the song's own tempo"
             >
               <span ref={tempoValue}>0.0%</span>
+            </button>
+            <button
+              ref={syncButton}
+              type="button"
+              data-on="false"
+              className="rounded border border-border px-1 py-1 text-[10px] font-bold uppercase tracking-wider text-muted hover:text-foreground disabled:opacity-40 data-[on=true]:border-[var(--sync)] data-[on=true]:bg-[var(--sync)] data-[on=true]:text-black"
+              style={{ "--sync": color } as React.CSSProperties}
+              // Nothing to sync to, or more than 8% apart (half / double tempo counts).
+              disabled={mixing || (role === "incoming" && locked) || otherBpm === null || syncRatio(otherBpm, a.bpm, true) === null}
+              onClick={() => syncDeck(deck)}
+              aria-label={`Sync Deck ${DECK_LETTERS[deck]}`}
+              title={role === "live" ? "Set this song's BPM to the cued song's" : "Set this song's BPM to the song on air's"}
+            >
+              Sync
             </button>
           </div>
         )}
@@ -434,12 +481,28 @@ export function DeckPanel({
         )}
       </div>
 
+      {liveTrack && a && (role === "live" || role === "incoming" || role === "loaded") && (
+        <CuePads
+          deck={deck}
+          track={liveTrack}
+          color={color}
+          disabled={role === "live" ? mixing || !transport : role === "incoming" ? locked || !entry : false}
+          spot={() => {
+            if (role === "live") return useSession.getState().snapshot()?.decks[deck]?.position ?? null;
+            const preview = usePreview.getState();
+            return preview.playing === cueTag ? preview.position() : (scrubbing ?? chosenStart);
+          }}
+          onGo={(pos) => (role === "live" ? jumpTo(deck, pos) : entry?.set({ kind: "bar", bar: beatBar(a, pos) }))}
+        />
+      )}
+
       <TrackOverview
         deck={deck}
         track={track}
         color={color}
         live={role === "live"}
         startAt={scrubbing ?? entry?.startAt}
+        hotCues={liveTrack?.hotCues}
         onPickBar={entry ? (bar) => entry.set({ kind: "bar", bar }) : undefined}
       />
     </section>

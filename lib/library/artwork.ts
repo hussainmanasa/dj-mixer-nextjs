@@ -15,7 +15,10 @@ const urls = new Map<string, Promise<string | null>>();
 export function artworkUrl(track: Track, getFile: (t: Track) => Promise<File>): Promise<string | null> {
   let url = urls.get(track.id);
   if (!url) {
-    url = load(track, getFile).catch(() => null);
+    url = load(track, getFile).catch((err: unknown) => {
+      console.warn(`Couldn't read the cover art of "${track.title}"`, err);
+      return null;
+    });
     urls.set(track.id, url);
   }
   return url;

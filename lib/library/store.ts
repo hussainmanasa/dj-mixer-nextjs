@@ -3,6 +3,7 @@
 // and the last session. Client-only.
 
 import { createStore, del, get, set, update } from "idb-keyval";
+import type { Waveform } from "@/lib/analysis/waveform";
 import type { MoodOverrides } from "@/lib/dj/moods";
 import type { MoodId, SetLogEntry, Track } from "@/lib/types";
 import { MAX_LOG_ENTRIES } from "./setlog";
@@ -61,6 +62,15 @@ export async function loadTracks(): Promise<Record<string, Track>> {
 
 export async function saveTracks(tracks: Record<string, Track>): Promise<void> {
   if (db) await set(KEYS.tracks, tracks, db);
+}
+
+/** A song's detailed waveform for the booth's track view (see lib/analysis/waveform.ts). */
+export async function loadWave(trackId: string): Promise<Waveform | undefined> {
+  return db ? get<Waveform>(`wave:${trackId}`, db) : undefined;
+}
+
+export async function saveWave(trackId: string, wave: Waveform): Promise<void> {
+  if (db) await set(`wave:${trackId}`, wave, db);
 }
 
 /** A song's cover art thumbnail; `false` once it's known to have none. */
