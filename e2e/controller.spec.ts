@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { deckStates, loadLibrary, startBooth } from "./helpers";
+import { deckStates, loadLibrary, startBooth, tapAudio } from "./helpers";
 
 const deck = (page: Page, letter: string) => page.getByRole("region", { name: `Deck ${letter}` });
 const states = async (page: Page) => (await deckStates(page)).join(" ");
@@ -7,14 +7,6 @@ const played = async (page: Page, letter: string) => {
   const m = (await deckStates(page)).find((d) => d.startsWith(`${letter}:`))!.match(/(\d+):(\d\d) \//);
   return m ? Number(m[1]) * 60 + Number(m[2]) : NaN;
 };
-/** An element's offset from its parent's left / bottom edge, as a share of the parent (0..1). */
-const along = (page: Page, testId: string, edge: "left" | "bottom") =>
-  page.getByTestId(testId).evaluate((el, edge) => {
-    const r = el.getBoundingClientRect();
-    const p = el.parentElement!.getBoundingClientRect();
-    return edge === "left" ? (r.left - p.left) / p.width : (p.bottom - r.bottom) / p.height;
-  }, edge);
-
 test("the booth is laid out like a DDJ-FLX4: Deck A · mixer · Deck B, with the deck and mixer controls in their places", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await loadLibrary(page);
@@ -62,23 +54,13 @@ test("the booth is laid out like a DDJ-FLX4: Deck A · mixer · Deck B, with the
   await master.fill(String(start));
 });
 
-test("the mixer shows what the auto-DJ does, and the loop section works: IN / OUT, 4 BEAT, ½ and 2×", async ({ page }) => {
+test("the loop section works: 4 BEAT, ½ and 2×, IN / OUT", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await loadLibrary(page);
   await startBooth(page, "Groove");
   await expect.poll(() => states(page), { timeout: 30_000 }).toMatch(/A:On air.*B:Cued/);
   await page.waitForTimeout(1000);
-  // Only Deck A is up: its channel fader is at the top, Deck B's down, the crossfader to the left.
-  expect(await along(page, "fader-1", "bottom")).toBeGreaterThan(0.7);
-  expect(await along(page, "fader-2", "bottom")).toBeLessThan(0.1);
-  expect(await along(page, "crossfader", "left")).toBeLessThan(0.1);
-  // ▶ on Deck B: both play at full, both faders up, the crossfader in the middle.
-  await deck(page, "B").getByRole("button", { name: "Play Deck B" }).click();
-  await expect.poll(() => states(page), { timeout: 3000 }).toMatch(/B:Playing along/);
-  await expect.poll(() => along(page, "fader-2", "bottom")).toBeGreaterThan(0.7);
-  await expect.poll(() => along(page, "crossfader", "left")).toBeGreaterThan(0.3);
-  expect(await along(page, "crossfader", "left")).toBeLessThan(0.55);
 
   // 4 BEAT on Deck A, then ½ and 2× (shown on the BEAT LOOP pads), then EXIT.
   const a = deck(page, "A");
@@ -105,4 +87,132 @@ test("the mixer shows what the auto-DJ does, and the loop section works: IN / OU
   await a.getByRole("button", { name: "Exit loop, Deck A" }).click();
   await expect.poll(() => played(page, "A"), { timeout: 8000 }).toBeGreaterThanOrEqual(at + 4);
   expect(errors).toEqual([]);
+});
+
+test("every mixer control works: channel faders, crossfader, TRIM, EQ and CFX change what the club hears", async ({ page }) => {
+  const taps = await tapAudio(page);
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await loadLibrary(page);
+  await startBooth(page, "Groove");
+  await expect.poll(() => states(page), { timeout: 30_000 }).toMatch(/A:On air.*B:Cued/);
+  const mixer = page.getByRole("region", { name: "Mixer" });
+  /** The mix's peak level over 1.5 s (after the meter's ~0.7 s window has caught up). */
+  const level = async () => {
+    await page.waitForTimeout(900);
+    await taps.reset();
+    await page.waitForTimeout(1500);
+    return (await taps.get()).pre;
+  };
+  const control = (name: string) => mixer.getByRole("slider", { name, exact: true });
+  const base = await level();
+  expect(base).toBeGreaterThan(0.05);
+
+  // Channel fader down: Deck A goes silent — on purpose, so the auto-DJ doesn't "recover" — and the mixer says so.
+  await control("Channel fader, Deck A").fill("0");
+  expect(await level()).toBeLessThan(0.002);
+  await expect(mixer.getByText("Deck A turned down — the club doesn't hear it")).toBeVisible();
+  await page.waitForTimeout(3000);
+  expect(await states(page)).toMatch(/A:On air .*Test Groove/);
+  await expect(page.getByText(/Recovered automatically/)).toHaveCount(0);
+  await control("Channel fader, Deck A").fill("100");
+  expect(await level()).toBeGreaterThan(base * 0.7);
+
+  // Crossfader all the way to Deck B: Deck A is cut; the centre brings it back at full.
+  await control("Crossfader").fill("100");
+  expect(await level()).toBeLessThan(0.002);
+  await control("Crossfader").fill("50");
+  expect(await level()).toBeGreaterThan(base * 0.7);
+
+  // TRIM fully down (−12 dB), then back to the centre.
+  await control("Trim, Deck A").fill("-100");
+  expect(await level()).toBeLessThan(base * 0.5);
+  await control("Trim, Deck A").fill("0");
+  expect(await level()).toBeGreaterThan(base * 0.7);
+
+  // LOW killed: the kick-heavy test songs lose most of their level.
+  await control("Low, Deck A").fill("-100");
+  expect(await level()).toBeLessThan(base * 0.7);
+  await control("Low, Deck A").locator("..").dblclick();
+  await expect(control("Low, Deck A")).toHaveValue("0");
+
+  // CFX to the right: the high-pass takes the bass out.
+  await control("CFX, Deck A").fill("100");
+  expect(await level()).toBeLessThan(base * 0.6);
+  await control("CFX, Deck A").fill("0");
+  expect(await level()).toBeGreaterThan(base * 0.7);
+
+  // HI and MID turn too (keys), and say how far.
+  const hi = control("Hi, Deck A");
+  await hi.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(hi).toHaveValue("1");
+  await expect(hi).toHaveAttribute("aria-valuetext", /\+0\.1 dB/);
+  await control("Mid, Deck A").fill("-50");
+  await expect(control("Mid, Deck A")).toHaveAttribute("aria-valuetext", "-13.0 dB");
+  // Dragging a channel fader moves it too.
+  const fader = control("Channel fader, Deck B");
+  await fader.scrollIntoViewIfNeeded();
+  const box = (await fader.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height - 4);
+  await page.mouse.down();
+  await page.mouse.up();
+  expect(Number(await fader.inputValue())).toBeLessThan(10);
+  expect(errors).toEqual([]);
+});
+
+test("scrolling over a control turns it and never scrolls the page (trackpad swipes too)", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await loadLibrary(page);
+  await startBooth(page, "Groove");
+  await expect.poll(() => states(page), { timeout: 30_000 }).toMatch(/A:On air/);
+  const mixer = page.getByRole("region", { name: "Mixer" });
+  const scrollY = () => page.evaluate(() => window.scrollY);
+  /** Swipe over a control like a trackpad (many small pixel steps), and say what its value did and whether the page moved. */
+  const swipe = async (control: ReturnType<Page["locator"]>, over: ReturnType<Page["locator"]>, dx: number, dy: number) => {
+    await over.scrollIntoViewIfNeeded();
+    const box = (await over.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    const y0 = await scrollY();
+    const v0 = Number(await control.inputValue());
+    for (let i = 0; i < 6; i++) {
+      await page.mouse.wheel(dx / 6, dy / 6);
+      await page.waitForTimeout(16);
+    }
+    await page.waitForTimeout(300);
+    return { moved: Number(await control.inputValue()) - v0, scrolled: (await scrollY()) - y0 };
+  };
+
+  const master = mixer.getByRole("slider", { name: "Club speakers volume" });
+  // Two fingers down over the MASTER knob: it turns down, the page stays put.
+  let r = await swipe(master, master.locator(".."), 0, 48);
+  expect(r.scrolled).toBe(0);
+  expect(r.moved).toBeLessThan(-15);
+  r = await swipe(master, master.locator(".."), 0, -48);
+  expect(r.scrolled).toBe(0);
+  expect(r.moved).toBeGreaterThan(15);
+
+  // A channel fader (down), the crossfader (sideways) and Deck A's tempo slider (up).
+  const fader = mixer.getByRole("slider", { name: "Channel fader, Deck A" });
+  r = await swipe(fader, fader.locator(".."), 0, 48);
+  expect(r).toMatchObject({ scrolled: 0 });
+  expect(r.moved).toBeLessThan(-15);
+  const xfader = mixer.getByRole("slider", { name: "Crossfader" });
+  r = await swipe(xfader, xfader.locator(".."), 48, 0);
+  expect(r.scrolled).toBe(0);
+  expect(r.moved).toBeGreaterThan(15);
+  await xfader.fill("50");
+  const tempo = deck(page, "A").getByRole("slider", { name: "Tempo, Deck A" });
+  r = await swipe(tempo, tempo, 0, -48);
+  expect(r.scrolled).toBe(0);
+  expect(r.moved).toBeGreaterThan(1);
+
+  // Over the pads (buttons), the page still scrolls as usual.
+  const pads = deck(page, "A").getByRole("group", { name: "Cue pads, Deck A" });
+  await pads.scrollIntoViewIfNeeded();
+  const box = (await pads.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const y0 = await scrollY();
+  await page.mouse.wheel(0, -200);
+  await expect.poll(scrollY).toBeLessThan(y0);
 });

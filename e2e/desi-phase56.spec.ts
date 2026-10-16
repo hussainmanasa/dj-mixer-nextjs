@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { DESI_FIXTURE_DIR, FIXTURE_DIR } from "./fixtures";
-import { deckStates, loadLibrary } from "./helpers";
+import { deckStates, loadLibrary, upNext } from "./helpers";
 
 const secs = (s: string) => {
   const m = /(\d+):(\d\d)\.(\d)/.exec(s);
@@ -50,7 +50,7 @@ test("suggested hook and dialogue; a far-off opener rewinds into the party", asy
   await page.getByRole("button", { name: /^Desi Night/ }).click();
   await page.locator("button[aria-busy]").click();
   await expect(page.getByText("Opening with the hook of Test Ballad 92")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText("Up next").locator("..")).toContainText("Rewind");
+  await expect(upNext(page)).toContainText("Rewind");
   // The hook is 8 bars (~21 s); then the rewind hands over to a party track.
   await expect.poll(async () => (await deckStates(page)).join(" "), { timeout: 60_000 }).toMatch(/B:On air .*Test Groove/);
   await page.click("nav >> text=History");
@@ -77,9 +77,9 @@ test("a song corrected to half tempo is beat-matched at ×2, not rewound", async
   await page.getByRole("button", { name: /^Desi Night/ }).click();
   await page.locator("button[aria-busy]").click();
   await expect(page.getByText("Opening with the hook of Test Slow 64")).toBeVisible({ timeout: 30_000 });
-  const upNext = page.getByText("Up next").locator("..");
-  await expect(upNext).toContainText("Drop");
-  await expect(upNext).not.toContainText("Rewind");
+  const next = upNext(page);
+  await expect(next).toContainText("Drop");
+  await expect(next).not.toContainText("Rewind");
   // Beat-matched: the incoming party deck runs at roughly 2 × 64 = 128.
   await expect(page.getByRole("region", { name: "Deck B" })).toContainText(/12[6-9]\.\d|130\.\d/);
   expect(errors).toEqual([]);

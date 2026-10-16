@@ -10,6 +10,7 @@
 
 import { AudioEngine } from "@/lib/audio/engine";
 import { REWIND_SECONDS, type Deck } from "@/lib/audio/deck";
+import type { MixerChannel } from "@/lib/audio/mixer";
 import type { FxKind } from "@/lib/audio/fx";
 import { libraryLoudness } from "@/lib/analysis/loudness";
 import {
@@ -63,6 +64,8 @@ const KEYLOCK_SWITCH_FADE = 0.04;
 const RESUME_FADE = 0.3;
 /** A hand on the jog wheel of the song on air stops it (and letting go starts it) this fast, like a record. */
 const HOLD_FADE = 0.012;
+/** Staff's fader / crossfader below this gain on the song on air: a deliberate silence (the watchdog waits). */
+const STAFF_MUTED = 0.03;
 /** CUE on a stopped deck within this of its cue point (seconds) plays it; further away, it sets a new one. */
 const CUE_SNAP = 0.02;
 /** Staff's tempo slider: at most this far from a song's own tempo (the same ±8% the auto-DJ syncs within). */
@@ -833,6 +836,18 @@ export class AutoDJ {
     if (!l) return;
     this.armed.delete(track.id);
     if (deck.setLoop(l.start, l.end)) this.loops.set(deck, l);
+  }
+
+  // ── The staff mixer (owner decision: the knobs, faders and crossfader work) ──
+
+  /** Staff moved a channel's TRIM / EQ / CFX knobs or its fader. On its own stage: the auto-DJ's mix carries on. */
+  setMixer(index: number, channel: MixerChannel): void {
+    this.engine.setMixer(index, channel);
+  }
+
+  /** Staff moved the crossfader (0 = Deck A only, 0.5 = both, 1 = Deck B only). */
+  setCrossfader(x: number): void {
+    this.engine.setCrossfader(x);
   }
 
   // ── CUE, like a CDJ's (owner decision of 16 Oct 2026) ──────────────────────
@@ -1954,6 +1969,11 @@ export class AutoDJ {
       if (!this.playing || this.recovering || !this.current || this.paused) return;
       const now = this.engine.now;
       if (now - this.current.startedAt < START_GRACE_SECONDS) return;
+      // Staff turned the song on air down (channel fader or crossfader): that silence is theirs, not a failure.
+      if (this.engine.channelGain(this.current.deck.index) < STAFF_MUTED) {
+        this.silentSince = null;
+        return;
+      }
       if (this.engine.peak() < SILENCE_LEVEL) {
         this.silentSince ??= now;
         if (now - this.silentSince > SILENCE_SECONDS) void this.recover("silence detected");

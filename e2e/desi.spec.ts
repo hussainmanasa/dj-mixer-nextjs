@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { deckStates, dropButton, loadLibrary } from "./helpers";
+import { deckStates, dropButton, loadLibrary, upNext } from "./helpers";
 
 const seconds = (s: string) => {
   const m = /(\d+):(\d\d)/.exec(s);
@@ -51,17 +51,17 @@ test("Desi Night: opener hook → dialogue → drop, then songs wait for Drop; S
   await d.getByRole("button", { name: "■ Stop" }).last().click();
   await d.getByRole("button", { name: "Done" }).click();
 
-  // Staff: queue B, pick Desi Night, play.
+  // Staff: load B into Deck B (it plays next), pick Desi Night, play.
   await page.click("nav >> text=Booth");
   await page.getByRole("button", { name: /^Desi Night/ }).click();
-  await page.getByRole("button", { name: "Add track" }).click();
+  await page.getByRole("button", { name: "Load track, Deck B" }).click();
   await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove B" }).getByRole("button").last().click();
   await page.locator("button[aria-busy]").click();
 
   // Opener: A plays from its hook (its first drop, ~0:45), with B up next as dialogue → drop.
   await expect(page.getByText("Opening with the hook of Test Groove A")).toBeVisible({ timeout: 30_000 });
   expect(await deckTime(page, "A")).toBeGreaterThanOrEqual(44);
-  await expect(page.getByText("Up next").locator("..")).toContainText("Dialogue → drop");
+  await expect(upNext(page)).toContainText("Dialogue → drop");
 
   // When the hook ends (8 bars ≈ 15 s) B's dialogue plays, then B jumps to its drop (~0:45).
   await expect.poll(async () => (await deckStates(page)).join(" "), { timeout: 40_000 }).toMatch(/B:On air .*Test Groove B/);
@@ -69,7 +69,7 @@ test("Desi Night: opener hook → dialogue → drop, then songs wait for Drop; S
   await expect(page.getByText("Opening with the hook")).toHaveCount(0);
 
   // Now songs wait for Drop.
-  await expect(page.getByText("Up next").locator("..")).toContainText("waits for Drop", { timeout: 20_000 });
+  await expect(upNext(page)).toContainText("waits for Drop", { timeout: 20_000 });
 
   // Start from on the cued deck: choose Beginning, then Drop.
   const cued = page.getByRole("region", { name: "Deck A" });

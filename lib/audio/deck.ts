@@ -1,11 +1,15 @@
 // One playback deck: buffer source → trim (volume matching) → 3-band EQ →
-// filter → fader → out [→ key-lock] → master, plus an echo send (delay with
-// feedback) used by echo-out transitions that also feeds `out`. Key-lock sits
+// filter → fader → staff channel (TRIM → EQ → CFX → channel fader × crossfader)
+// → out [→ key-lock] → master, plus an echo send (delay with feedback) used by
+// echo-out transitions that also feeds the staff channel. The first half is the
+// auto-DJ's automation; the staff channel is the mixer's knobs and faders, so the
+// two never fight over the same AudioParam. Key-lock sits
 // after all of the deck's automation, so fades and EQ moves still land on the
 // beat; every deck gets the same key-lock delay, so decks stay aligned.
 // Client-only: requires Web Audio.
 
 import { trimDb } from "@/lib/analysis/loudness";
+import { cfxFilterOf, eqDbOf, faderGainOf, NEUTRAL_CHANNEL, trimDbOf, type MixerChannel } from "./mixer";
 import type { Track } from "@/lib/types";
 import { PlaybackTimeline, rebaseTimeline, type Jump } from "./timeline";
 
@@ -29,7 +33,14 @@ export class Deck {
   readonly echoSend: GainNode;
   readonly echoDelay: DelayNode;
   readonly echoFeedback: GainNode;
-  /** Taps the fader's output for the booth's channel level meter (display only). */
+  /** The staff channel strip (the mixer's knobs and faders), after the auto-DJ's automation. */
+  private readonly staffTrim: GainNode;
+  private readonly staffLow: BiquadFilterNode;
+  private readonly staffMid: BiquadFilterNode;
+  private readonly staffHigh: BiquadFilterNode;
+  private readonly staffFilter: BiquadFilterNode;
+  private readonly staffFader: GainNode;
+  /** Taps the channel's output for the booth's channel level meter (display only). */
   private readonly meter: AnalyserNode;
   private meterData: Float32Array<ArrayBuffer> | null = null;
   /** Everything the deck outputs passes through here. */
@@ -72,13 +83,45 @@ export class Deck {
     this.echoDelay = new DelayNode(ctx, { maxDelayTime: 4, delayTime: 0.375 });
     this.echoFeedback = new GainNode(ctx, { gain: 0.45 });
 
+    this.staffTrim = new GainNode(ctx, { gain: 1 });
+    this.staffLow = new BiquadFilterNode(ctx, { type: "lowshelf", frequency: 200, gain: 0 });
+    this.staffMid = new BiquadFilterNode(ctx, { type: "peaking", frequency: 1000, Q: 0.7, gain: 0 });
+    this.staffHigh = new BiquadFilterNode(ctx, { type: "highshelf", frequency: 3500, gain: 0 });
+    this.staffFilter = new BiquadFilterNode(ctx, { type: "lowpass", frequency: 22050, Q: 0.7 });
+    this.staffFader = new GainNode(ctx, { gain: 1 });
+
     this.trim.connect(this.low);
-    this.low.connect(this.mid).connect(this.high).connect(this.filter).connect(this.fader).connect(this.out);
-    // Echo taps pre-fader so the tail keeps ringing after the fader closes.
-    this.filter.connect(this.echoSend).connect(this.echoDelay).connect(this.out);
+    this.low.connect(this.mid).connect(this.high).connect(this.filter).connect(this.fader).connect(this.staffTrim);
+    this.staffTrim.connect(this.staffLow).connect(this.staffMid).connect(this.staffHigh).connect(this.staffFilter).connect(this.staffFader).connect(this.out);
+    // Echo taps pre-fader so the tail keeps ringing after the fader closes (the staff channel still shapes it).
+    this.filter.connect(this.echoSend).connect(this.echoDelay).connect(this.staffTrim);
     this.echoDelay.connect(this.echoFeedback).connect(this.echoDelay);
     this.meter = new AnalyserNode(ctx, { fftSize: 1024 });
-    this.fader.connect(this.meter);
+    this.staffFader.connect(this.meter);
+    this.setMixer(NEUTRAL_CHANNEL, 1, 0);
+  }
+
+  /**
+   * Staff moved this channel's knobs or faders (`xGain`: its side of the crossfader). Glides over ~15 ms so a
+   * knob never zips or clicks; `glide` 0 sets it at once. Never touches the auto-DJ's automation.
+   */
+  setMixer(ch: MixerChannel, xGain: number, glide = 0.015): void {
+    const now = this.ctx.currentTime;
+    const to = (param: AudioParam, value: number) => {
+      param.cancelScheduledValues(now);
+      if (glide > 0) param.setTargetAtTime(value, now, glide / 3);
+      else param.setValueAtTime(value, now);
+    };
+    to(this.staffTrim.gain, Math.pow(10, trimDbOf(ch.trim) / 20));
+    to(this.staffLow.gain, eqDbOf(ch.low));
+    to(this.staffMid.gain, eqDbOf(ch.mid));
+    to(this.staffHigh.gain, eqDbOf(ch.hi));
+    const f = cfxFilterOf(ch.cfx);
+    // Switching the type is instant; it only happens at the centre, where both are wide open (inaudible).
+    if (this.staffFilter.type !== f.type) this.staffFilter.type = f.type;
+    to(this.staffFilter.frequency, f.frequency);
+    to(this.staffFilter.Q, f.q);
+    to(this.staffFader.gain, faderGainOf(ch.fader) * xGain);
   }
 
   /** The loudest sample after the fader over the last ~20 ms (0..1+), for the channel meter. */

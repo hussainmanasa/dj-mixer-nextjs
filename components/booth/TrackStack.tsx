@@ -5,7 +5,8 @@ import { drops } from "@/lib/analysis/structure";
 import type { Waveform } from "@/lib/analysis/waveform";
 import { barSeconds, gridPosition, PHRASE_BARS } from "@/lib/dj/mixpoints";
 import { waveformFor } from "@/lib/library/waveform";
-import type { Track } from "@/lib/types";
+import type { AutoDJStatus } from "@/lib/dj/autodj";
+import type { Track, TransitionKind } from "@/lib/types";
 import { useLibrary } from "@/store/library";
 import { useSession } from "@/store/session";
 import type { DeckRole } from "./DeckPanel";
@@ -20,6 +21,35 @@ export interface StackRow {
   role: DeckRole;
   /** Where a loaded or cued song will start (track seconds). */
   startAt?: number;
+}
+
+export const TRANSITION_LABEL: Record<TransitionKind, string> = {
+  blend: "Beat-matched blend",
+  filterSweep: "Filter sweep",
+  echoOut: "Echo-out",
+  cut: "Cut on the downbeat",
+  drop: "Drop",
+  dialogue: "Dialogue → drop",
+  rewind: "Rewind",
+  layer: "Layer",
+};
+
+/** How the next song comes in, in a few words (the cued deck's row): its transition, or why it waits. */
+export function nextHow(status: AutoDJStatus): string {
+  const n = status.next;
+  if (!n) return "";
+  const loopingLive = status.loops.some((l) => l.deck === status.now?.deck && !l.armed);
+  const how =
+    status.paused !== null && n.transition !== "layer"
+      ? "When you press ▶"
+      : loopingLive && n.transition !== "layer"
+        ? "After the loop"
+        : n.together
+          ? "Playing together · Drop to mix"
+          : n.afterSong
+            ? "After this song"
+            : TRANSITION_LABEL[n.transition];
+  return [how, n.holding ? "waits for Drop" : "", n.requested ? "Requested" : ""].filter(Boolean).join(" · ");
 }
 
 /** Seconds of music across a row (room time, so beat-matched decks line up). */
@@ -68,6 +98,8 @@ function Row({ row, color, span }: { row: StackRow; color: string; span: number 
   const track = useLibrary((s) => (row.track ? s.tracks[row.track.id] : undefined)) ?? row.track;
   const getFile = useLibrary((s) => s.getFile);
   const a = track?.analysis ?? null;
+  // The cued song: how it comes in (was the Up next card).
+  const how = useSession((s) => (role === "incoming" ? nextHow(s.status) : ""));
   const [wave, setWave] = useState<Waveform | null>(null);
   useEffect(() => {
     if (!row.track) return;
@@ -199,6 +231,10 @@ function Row({ row, color, span }: { row: StackRow; color: string; span: number 
           BPM <span ref={tempo} />
         </p>
         <p ref={time} className="font-mono text-xs text-muted tabular-nums" />
+        {/* Always there (empty on other decks), so the rows keep their height. */}
+        <p className="h-4 truncate text-[11px] font-semibold" style={{ color }} data-testid={role === "incoming" ? "up-next" : undefined}>
+          {how}
+        </p>
       </div>
       <canvas ref={canvas} className="h-24 w-full rounded-xl bg-[#07070b]" aria-hidden />
       <div className="flex flex-col justify-center gap-1 px-1 font-mono" aria-hidden>

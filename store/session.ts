@@ -6,11 +6,12 @@
 
 import { create } from "zustand";
 import type { FxKind } from "@/lib/audio/fx";
+import { NEUTRAL_CHANNEL, type MixerChannel } from "@/lib/audio/mixer";
 import { AutoDJ, type AutoDJStatus, type BoothSnapshot, type Preload } from "@/lib/dj/autodj";
 import { DEFAULT_MOOD, resolveMood, targetEnergy } from "@/lib/dj/moods";
 import { rankForRequest, type RequestOption } from "@/lib/dj/selector";
 import { appendSetLog, loadLastSession, saveLastSession, type Settings } from "@/lib/library/store";
-import type { EntryChoice, MoodId, Track } from "@/lib/types";
+import { MAX_DECKS, type EntryChoice, type MoodId, type Track } from "@/lib/types";
 import { readyTracks, useLibrary } from "./library";
 import { usePreview } from "./preview";
 
@@ -58,6 +59,12 @@ interface SessionState {
   spinBack: (deck: number, position: number) => void;
   /** A deck's tempo slider (playback rate). */
   setDeckTempo: (deck: number, rate: number) => void;
+  /** The mixer's knobs and faders per channel (deck index) and the crossfader (0 = A … 0.5 = both … 1 = B). */
+  mixer: MixerChannel[];
+  crossfader: number;
+  /** Staff turned a channel's knob or moved its fader. */
+  setMixer: (deck: number, patch: Partial<MixerChannel>) => void;
+  setCrossfader: (x: number) => void;
   /** Beat loop on the song on air, the song playing along, or armed on the cued song; the same length again lets it go. */
   loop: (deck: number, beats: number) => void;
   /** A saved loop on a deck (pressed again: let it go). */
@@ -124,6 +131,9 @@ async function ensureDj(
   }, keyLock);
   dj = created;
   created.engine.setVolume(volume);
+  // The mixer's knobs and faders as staff left them (they can be set before Play).
+  get().mixer.forEach((ch, i) => created.setMixer(i, ch));
+  created.setCrossfader(get().crossfader);
   // The mix goes to the club speakers chosen on the Library page.
   await created.engine.setOutput(mainOutput);
   return created;
@@ -162,6 +172,8 @@ export const useSession = create<SessionState>((set, get) => ({
   starting: false,
   stopping: false,
   preloads: [],
+  mixer: Array.from({ length: MAX_DECKS }, () => ({ ...NEUTRAL_CHANNEL })),
+  crossfader: 0.5,
   resumeAvailable: false,
 
   async hydrate() {
@@ -277,6 +289,20 @@ export const useSession = create<SessionState>((set, get) => ({
   spinBack(deck, position) {
     if (!dj) return;
     if (get().status.holding !== deck || !dj.spinBack()) get().releaseDeck(deck, position);
+  },
+
+  setMixer(deck, patch) {
+    const mixer = [...get().mixer];
+    if (!mixer[deck]) return;
+    mixer[deck] = { ...mixer[deck], ...patch };
+    set({ mixer });
+    dj?.setMixer(deck, mixer[deck]);
+  },
+
+  setCrossfader(x) {
+    const crossfader = Math.max(0, Math.min(1, x));
+    set({ crossfader });
+    dj?.setCrossfader(crossfader);
   },
 
   setDeckTempo(deck, rate) {

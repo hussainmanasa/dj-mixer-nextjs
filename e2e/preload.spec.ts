@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { deckStates, dropButton, loadLibrary } from "./helpers";
+import { deckStates, dropButton, loadLibrary, upNext } from "./helpers";
 
 function collectErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -40,7 +40,7 @@ test("decks loaded before Play: Deck A starts from its chosen point, Deck B come
   // Deck A plays C from its drop (~0:45); A is cued on Deck B.
   await expect.poll(async () => (await deckStates(page)).join(" "), { timeout: 30_000 }).toMatch(/A:On air .*Test Groove C/);
   expect(seconds((await deck(page, "A").textContent()) ?? "")).toBeGreaterThanOrEqual(45);
-  await expect(page.getByText("Up next").locator("..")).toContainText("Test Groove A");
+  await expect(upNext(page)).toContainText("Test Groove A");
   await expect.poll(async () => (await deckStates(page)).join(" ")).toMatch(/B:Cued .*Test Groove A/);
   expect(errors).toEqual([]);
 });

@@ -1,8 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
-import { deckStates, dropButton, loadLibrary, startBooth, tapAudio } from "./helpers";
+import { deckStates, dropButton, loadLibrary, startBooth, tapAudio, upNext } from "./helpers";
 
 const states = async (page: Page) => (await deckStates(page)).join(" ");
-const upNext = (page: Page) => page.getByRole("heading", { name: "Up next" }).locator("..");
 
 test("▶ Play on the cued deck plays both decks together at full level — nothing mixes or swaps by itself", async ({ page }) => {
   test.setTimeout(150_000);

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { deckStates, dropButton, loadLibrary, startBooth, tapAudio } from "./helpers";
+import { deckStates, dropButton, loadLibrary, startBooth, tapAudio, upNext } from "./helpers";
 
 const deck = (page: Page, letter: string) => page.getByRole("region", { name: `Deck ${letter}` });
 const states = async (page: Page) => (await deckStates(page)).join(" ");
@@ -7,7 +7,6 @@ const played = async (page: Page, letter: string) => {
   const m = (await deckStates(page)).find((d) => d.startsWith(`${letter}:`))!.match(/(\d+):(\d\d) \//);
   return m ? Number(m[1]) * 60 + Number(m[2]) : NaN;
 };
-const upNext = (page: Page) => page.getByRole("heading", { name: "Up next" }).locator("..");
 
 test("loops: the song repeats a few beats until let go, the next mix waits; Drop ends a loop", async ({ page }) => {
   const taps = await tapAudio(page);

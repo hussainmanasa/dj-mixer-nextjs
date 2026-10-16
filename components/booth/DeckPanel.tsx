@@ -13,6 +13,7 @@ import { JogWheel, type JogScrub } from "./JogWheel";
 import { DECK_LETTERS, LABEL, PANEL, SMALL_BUTTON, padStyle } from "./theme";
 import { TrackOverview } from "./TrackOverview";
 import { useArtwork } from "./useArtwork";
+import { useWheel } from "./useWheel";
 import { CuePads } from "./CuePads";
 import { syncRatio } from "@/lib/dj/selector";
 
@@ -124,6 +125,15 @@ export function DeckPanel({
   const setDeckTempo = useSession((s) => s.setDeckTempo);
   const tempoInput = useRef<HTMLInputElement>(null);
   const tempoValue = useRef<HTMLSpanElement>(null);
+  const tempoBox = useRef<HTMLDivElement>(null);
+  // Scroll / a trackpad swipe over the tempo slider moves it (the page stays put): a mouse-wheel click 0.1%.
+  useWheel(tempoBox, (amount, notch) => {
+    const input = tempoInput.current;
+    if (!input || input.disabled) return;
+    const pct = Math.max(-MAX_TEMPO * 100, Math.min(MAX_TEMPO * 100, Number(input.value) + (notch ? amount * 0.1 : (amount / 160) * MAX_TEMPO * 200)));
+    input.value = pct.toFixed(1);
+    setDeckTempo(deck, 1 + Number(input.value) / 100);
+  });
   const art = useArtwork(track);
   const playPreview = usePreview((s) => s.play);
   const getFile = useLibrary((s) => s.getFile);
@@ -382,7 +392,7 @@ export function DeckPanel({
         <div className="mx-auto w-full max-w-[15rem] flex-1 self-center">
           <JogWheel deck={deck} track={track} color={color} scrub={jog} art={art} />
         </div>
-        <div className="flex w-12 flex-col items-center gap-1">
+        <div ref={tempoBox} className="flex w-12 flex-col items-center gap-1 overscroll-contain">
           <span className={LABEL}>Tempo</span>
           <span className="text-[10px] font-bold text-[#9a9aa6]" aria-hidden>
             +{MAX_TEMPO * 100}
@@ -403,7 +413,7 @@ export function DeckPanel({
             disabled={tempoOff}
             onChange={(e) => setDeckTempo(deck, 1 + Number(e.target.value) / 100)}
             onDoubleClick={() => setDeckTempo(deck, 1)}
-            className="w-full flex-1 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+            className="w-full flex-1 cursor-pointer touch-none disabled:cursor-not-allowed disabled:opacity-40"
             style={{ writingMode: "vertical-lr", direction: "rtl", accentColor: color }}
           />
           <span className="text-[10px] font-bold text-[#9a9aa6]" aria-hidden>

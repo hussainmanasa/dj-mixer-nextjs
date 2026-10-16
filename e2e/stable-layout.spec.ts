@@ -17,7 +17,7 @@ async function layout(page: Page) {
     where(deck(page, "B").getByRole("group", { name: "Cue pads, Deck B" })),
     where(deck(page, "A").getByRole("group", { name: "Loop, Deck A" })),
     where(page.getByRole("group", { name: "Track view, Deck B" })),
-    where(page.getByRole("heading", { name: "Up next" })),
+    where(page.getByRole("region", { name: "Mixer" })),
   ]);
 }
 

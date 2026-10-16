@@ -1,15 +1,16 @@
 "use client";
 
 import { useRef, type ReactNode } from "react";
-import { EQ_KILL_DB } from "@/lib/audio/deck";
+import { channelGainOf, eqKnobOf, eqDbOf, trimDbOf, TRIM_DB, type MixerChannel } from "@/lib/audio/mixer";
 import { barAt, type CuePlan } from "@/lib/dj/cues";
 import type { EntryChoice, Track } from "@/lib/types";
 import { useLibrary } from "@/store/library";
 import { usePreview } from "@/store/preview";
 import { useSession } from "@/store/session";
 import { formatTime, setText, useBoothFrame } from "./frame";
-import { DisplayKnob, setKnob, VolumeKnob } from "./Knob";
-import { DECK_LETTERS, LABEL, PANEL, SMALL_BUTTON } from "./theme";
+import { Fader } from "./Fader";
+import { Knob, setKnob, VolumeKnob } from "./Knob";
+import { DECK_LETTERS, PANEL, SMALL_BUTTON } from "./theme";
 
 /** What the mixer needs to know about one channel (deck). */
 export interface Channel {
@@ -23,8 +24,6 @@ export interface Channel {
   entry?: { set: (choice: EntryChoice) => void };
 }
 
-/** dB → knob position: 0 dB at the centre, a kill fully left, +6 dB fully right. */
-const eqKnob = (db: number) => (db >= 0 ? db / 6 : db / -EQ_KILL_DB);
 /** Peak level → meter height (−48 dB … 0 dB). */
 const meter = (peak: number) => Math.max(0, Math.min(1, 1 + (20 * Math.log10(Math.max(1e-5, peak))) / 48));
 const METER_STEPS = 12;
@@ -33,10 +32,10 @@ const METER_STEPS = 12;
  * The mixer between the two decks, laid out like a DDJ-FLX4's: MASTER and
  * PHONES levels either side of the set's Play / Stop, LOAD buttons, then per
  * channel TRIM, HI, MID, LOW and CFX, 🎧 CUE, the channel fader with its level
- * meter, and the crossfader. Staff turn only the two volumes: the EQ, filter,
- * faders and crossfader show what the auto-DJ is doing (owner decision 2 — the
- * auto-DJ mixes), moving by themselves like motorised controls. The centre holds
- * the auto-DJ's own controls: AI DJ, DROP and the beat FX.
+ * meter, and the crossfader. Every knob and fader works (owner decision): they
+ * set the channel's own stage, after the auto-DJ's automation, so the auto-DJ
+ * still beat-matches and mixes underneath — a dot on each knob and a tick by
+ * each fader show what it is doing. The centre holds AI DJ, DROP and Beat FX.
  */
 export function Mixer({
   channels,
@@ -62,6 +61,14 @@ export function Mixer({
   const previewVolume = useLibrary((s) => s.settings.previewVolume);
   const setVolume = useSession((s) => s.setVolume);
   const setPreviewVolume = useLibrary((s) => s.setPreviewVolume);
+  // A playing deck staff turned all the way down (channel fader or crossfader): say so, the club can't hear it.
+  const muted = useSession((s) => {
+    const st = s.status;
+    if (!st.playing || st.silent) return null;
+    const sounding = [st.now?.deck, st.next && st.next.together ? st.next.deck : undefined].filter((d): d is number => d !== undefined);
+    const down = sounding.filter((d) => d < 2 && channelGainOf(s.mixer[d], s.crossfader, d as 0 | 1) < 0.03);
+    return down.length ? down.map((d) => DECK_LETTERS[d]).join(" and ") : null;
+  });
   return (
     <section aria-label="Mixer" className={`${PANEL} flex flex-col gap-3 p-4`}>
       <div className="flex items-center justify-between gap-2">
@@ -70,8 +77,8 @@ export function Mixer({
         <VolumeKnob label="Phones" name="Headphones volume" value={previewVolume} onChange={setPreviewVolume} color={color} />
       </div>
       {/* Its space is kept, so nothing moves when it shows. */}
-      <p className="min-h-[1.25rem] text-center text-xs text-warn" style={{ visibility: playing && volume === 0 ? "visible" : "hidden" }}>
-        Volume is at 0 — the club hears nothing
+      <p className="min-h-[1.25rem] text-center text-xs text-warn" style={{ visibility: (playing && volume === 0) || muted ? "visible" : "hidden" }}>
+        {playing && volume === 0 ? "Volume is at 0 — the club hears nothing" : muted ? `Deck ${muted} turned down — the club doesn't hear it` : " "}
       </p>
       {meterBar}
       <div className="grid grid-cols-2 gap-2">
@@ -80,13 +87,13 @@ export function Mixer({
         ))}
       </div>
       <div className="grid grid-cols-[3.25rem_1fr_3.25rem] items-start gap-2">
-        <ChannelKnobs deck={channels[0].deck} />
+        <ChannelKnobs deck={channels[0].deck} color={color} />
         <div className="flex min-w-0 flex-col items-center gap-3 pt-1">
           {aiDj}
           {drop}
           {fx}
         </div>
-        <ChannelKnobs deck={channels[1].deck} />
+        <ChannelKnobs deck={channels[1].deck} color={color} />
       </div>
       <div className="grid grid-cols-2 gap-2">
         {channels.map((c) => (
@@ -116,8 +123,16 @@ export function LoadButton({ channel }: { channel: Channel }) {
   );
 }
 
-/** TRIM, HI, MID, LOW and CFX of one channel, set by the auto-DJ (volume matching, transitions). */
-function ChannelKnobs({ deck }: { deck: number }) {
+const dB = (db: number) => `${db > 0 ? "+" : ""}${db.toFixed(1)} dB`;
+
+/**
+ * TRIM, HI, MID, LOW and CFX of one channel. Staff turn them (on top of the auto-DJ's volume matching and EQ moves,
+ * which the dot on each ring shows); double-click centres one.
+ */
+function ChannelKnobs({ deck, color }: { deck: number; color: string }) {
+  const channel = useSession((s) => s.mixer[deck]);
+  const setMixer = useSession((s) => s.setMixer);
+  const letter = DECK_LETTERS[deck];
   const trim = useRef<HTMLSpanElement>(null);
   const hi = useRef<HTMLSpanElement>(null);
   const mid = useRef<HTMLSpanElement>(null);
@@ -125,19 +140,37 @@ function ChannelKnobs({ deck }: { deck: number }) {
   const cfx = useRef<HTMLSpanElement>(null);
   useBoothFrame((snap) => {
     const v = snap?.decks[deck] ?? null;
-    setKnob(trim.current, v ? v.trimDb / 12 : 0);
-    setKnob(hi.current, v ? eqKnob(v.highDb) : 0);
-    setKnob(mid.current, v ? eqKnob(v.midDb) : 0);
-    setKnob(low.current, v ? eqKnob(v.bassDb) : 0);
+    setKnob(trim.current, v ? v.trimDb / TRIM_DB : 0);
+    setKnob(hi.current, v ? eqKnobOf(v.highDb) : 0);
+    setKnob(mid.current, v ? eqKnobOf(v.midDb) : 0);
+    setKnob(low.current, v ? eqKnobOf(v.bassDb) : 0);
     setKnob(cfx.current, v ? v.cfx : 0);
   });
+  const knob = (key: keyof MixerChannel, label: string, auto: React.Ref<HTMLSpanElement>, text: (v: number) => string, title: string) => (
+    <Knob
+      label={label}
+      name={`${label}, Deck ${letter}`}
+      value={channel[key]}
+      onChange={(v) => setMixer(deck, { [key]: v })}
+      color={color}
+      auto={auto}
+      valueText={text}
+      title={title}
+    />
+  );
   return (
-    <div className="flex flex-col items-center gap-1.5" aria-hidden>
-      <DisplayKnob label="Trim" indicator={trim} title="Trim — the auto-DJ matches each song's loudness" />
-      <DisplayKnob label="Hi" indicator={hi} />
-      <DisplayKnob label="Mid" indicator={mid} />
-      <DisplayKnob label="Low" indicator={low} title="Low — the auto-DJ swaps the basslines in a mix" />
-      <DisplayKnob label="CFX" indicator={cfx} title="Colour FX — the auto-DJ's filter sweeps (left low-pass, right high-pass)" />
+    <div className="flex flex-col items-center gap-1.5">
+      {knob("trim", "Trim", trim, (v) => dB(trimDbOf(v)), "Trim ±12 dB (the dot: the auto-DJ's loudness matching)")}
+      {knob("hi", "Hi", hi, (v) => dB(eqDbOf(v)), "High EQ: kill … +6 dB (the dot: the auto-DJ's)")}
+      {knob("mid", "Mid", mid, (v) => dB(eqDbOf(v)), "Mid EQ: kill … +6 dB (the dot: the auto-DJ's)")}
+      {knob("low", "Low", low, (v) => dB(eqDbOf(v)), "Low EQ: kill … +6 dB (the dot: the auto-DJ's bass swaps)")}
+      {knob(
+        "cfx",
+        "CFX",
+        cfx,
+        (v) => (Math.abs(v) < 0.02 ? "off" : v < 0 ? `low-pass ${Math.round(-v * 100)}%` : `high-pass ${Math.round(v * 100)}%`),
+        "Colour FX: left low-pass, right high-pass, off in the centre (the dot: the auto-DJ's filter sweeps)",
+      )}
     </div>
   );
 }
@@ -196,67 +229,61 @@ export function ListenButtons({ channel }: { channel: Channel }) {
   );
 }
 
-/** Channel faders with their level meters, and the crossfader: where the auto-DJ has the mix. */
+/**
+ * Channel faders with their level meters, and the crossfader. Staff move them; the tick beside each fader is the
+ * auto-DJ's own fade on that channel. The crossfader's centre leaves both channels full; each end cuts the other.
+ */
 function Faders({ decks, color }: { decks: [number, number]; color: string }) {
-  const caps = useRef<(HTMLSpanElement | null)[]>([]);
+  const mixer = useSession((s) => s.mixer);
+  const crossfader = useSession((s) => s.crossfader);
+  const setMixer = useSession((s) => s.setMixer);
+  const setCrossfader = useSession((s) => s.setCrossfader);
+  const ticks = useRef<(HTMLSpanElement | null)[]>([]);
   const meters = useRef<(HTMLSpanElement | null)[][]>([[], []]);
-  const xfader = useRef<HTMLSpanElement>(null);
   useBoothFrame((snap) => {
-    const views = decks.map((d) => snap?.decks[d] ?? null);
-    views.forEach((v, i) => {
-      const cap = caps.current[i];
-      if (cap) cap.style.bottom = `calc(${(v?.fader ?? 0) * 100}% * 0.82)`;
+    decks.forEach((d, i) => {
+      const v = snap?.decks[d] ?? null;
+      const tick = ticks.current[i];
+      if (tick) tick.style.bottom = `calc(${(v?.fader ?? 0) * 100}% * 0.82 + 9%)`;
       const lit = Math.round(meter(v?.level ?? 0) * METER_STEPS);
       meters.current[i].forEach((seg, k) => {
         if (seg) seg.style.opacity = k < lit ? "1" : "0.12";
       });
     });
-    // Crossfader: left with only channel 1 up, right with only channel 2, centre with both.
-    const [a, b] = views.map((v) => v?.fader ?? 0);
-    const x = a + b > 0.001 ? 0.5 + (b - a) / 2 : 0.5;
-    if (xfader.current) xfader.current.style.left = `calc(${x * 100}% * 0.84)`;
   });
   const segColor = (k: number) => (k >= METER_STEPS - 2 ? "#ef4444" : k >= METER_STEPS - 4 ? "#f59e0b" : color);
   return (
-    <div className="flex flex-col gap-3" aria-hidden title="Channel faders and crossfader — moved by the auto-DJ">
-      <div className="flex items-stretch justify-center gap-4">
-        {[0, 1].map((i) => (
-          <div key={i} className="flex items-stretch gap-2">
+    <div className="flex flex-col gap-3">
+      <div className="flex items-start justify-center gap-4">
+        {decks.map((d, i) => (
+          <div key={d} className="flex items-start gap-2">
             {i === 1 && <Meter steps={METER_STEPS} onRef={(k, el) => (meters.current[1][k] = el)} segColor={segColor} />}
-            <div className="flex flex-col items-center gap-1">
-              <div className="relative h-24 w-8">
-                <span className="absolute inset-y-1 left-1/2 w-1.5 -translate-x-1/2 rounded-full bg-[#050506] shadow-[inset_0_1px_2px_rgba(0,0,0,0.8)]" />
-                <span
-                  ref={(el) => {
-                    caps.current[i] = el;
-                  }}
-                  data-testid={`fader-${i + 1}`}
-                  className="absolute left-0 h-[18%] w-8 rounded-sm border border-[#4a4a54] bg-[linear-gradient(180deg,#3a3a42,#1c1c22)] shadow-[0_3px_5px_rgba(0,0,0,0.6)]"
-                  style={{ bottom: 0 }}
-                >
-                  <span className="absolute inset-x-1 top-1/2 h-px bg-white/70" />
-                </span>
-              </div>
-              <span className={LABEL}>Ch {i + 1}</span>
-            </div>
+            <Fader
+              name={`Channel fader, Deck ${DECK_LETTERS[d]}`}
+              label={`Ch ${i + 1}`}
+              orientation="vertical"
+              value={mixer[d].fader}
+              reset={1}
+              onChange={(v) => setMixer(d, { fader: v })}
+              testId={`fader-${i + 1}`}
+              auto={(el) => {
+                ticks.current[i] = el;
+              }}
+            />
             {i === 0 && <Meter steps={METER_STEPS} onRef={(k, el) => (meters.current[0][k] = el)} segColor={segColor} />}
           </div>
         ))}
       </div>
-      <div className="flex flex-col items-center gap-1">
-        <div className="relative h-8 w-full max-w-[12rem]">
-          <span className="absolute inset-x-1 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-[#050506] shadow-[inset_0_1px_2px_rgba(0,0,0,0.8)]" />
-          <span
-            ref={xfader}
-            data-testid="crossfader"
-            className="absolute top-0 h-8 w-[16%] rounded-sm border border-[#4a4a54] bg-[linear-gradient(180deg,#3a3a42,#1c1c22)] shadow-[0_3px_5px_rgba(0,0,0,0.6)]"
-            style={{ left: "42%" }}
-          >
-            <span className="absolute inset-y-1 left-1/2 w-px bg-white/70" />
-          </span>
-        </div>
-        <span className={LABEL}>Crossfader</span>
-      </div>
+      <Fader
+        name="Crossfader"
+        label="Crossfader"
+        orientation="horizontal"
+        value={crossfader}
+        reset={0.5}
+        onChange={setCrossfader}
+        testId="crossfader"
+        className="mx-auto w-full max-w-[12rem]"
+      />
     </div>
   );
 }

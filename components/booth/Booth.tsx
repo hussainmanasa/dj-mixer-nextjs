@@ -4,9 +4,9 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { SCHEDULE_MARGIN, STOP_FADE_SECONDS, type AutoDJStatus } from "@/lib/dj/autodj";
 import { cuePlan, firstStart, resolveEntry } from "@/lib/dj/cues";
-import { gridPosition, PHRASE_BARS } from "@/lib/dj/mixpoints";
+import { gridPosition } from "@/lib/dj/mixpoints";
 
-import type { EntryChoice, Track, TransitionKind } from "@/lib/types";
+import type { EntryChoice, Track } from "@/lib/types";
 import { previewIsSeparate, readyTracks, useLibrary, useMoods } from "@/store/library";
 import { useSession } from "@/store/session";
 import { DeckPanel, type DeckRole } from "./DeckPanel";
@@ -17,16 +17,6 @@ import { FxPad } from "./FxPad";
 import { TrackPicker } from "./TrackPicker";
 import { MOOD_COLOR } from "./theme";
 
-const TRANSITION_LABEL: Record<TransitionKind, string> = {
-  blend: "Beat-matched blend",
-  filterSweep: "Filter sweep",
-  echoOut: "Echo-out",
-  cut: "Cut on the downbeat",
-  drop: "Drop",
-  dialogue: "Dialogue → drop",
-  rewind: "Rewind",
-  layer: "Layer",
-};
 
 function deckRole(status: AutoDJStatus, deck: number): { role: DeckRole; track: Track | null } {
   if (status.now?.deck === deck) return { role: "live", track: status.now.track };
@@ -200,28 +190,20 @@ export function Booth() {
     />
   );
 
-  // The software's screen above the controller: what's playing, what's next, the queue and notes.
-  const screen = (
-    <section aria-label="Set" className="grid gap-4 lg:grid-cols-[auto_1fr_1fr]">
-      <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-border bg-surface/80 p-4 backdrop-blur">
-        <BeatCounter deck={status.now?.deck ?? null} track={status.now?.track ?? null} color={color} />
-        {/* Notes have a fixed space (three lines; longer ones are cut) so the booth never jumps when one comes or goes. */}
-        <div className="h-[3.75rem] w-72 overflow-hidden text-center text-sm leading-5" aria-live="polite">
-          {status.error && <p className="text-bad">{status.error}</p>}
-          {status.note && <p className="text-warn">{status.note}</p>}
-          {!canPlay && hydrated && (
-            <p className="text-muted">
-              {folderState === "none" && ready === 0 ? "No music folder connected. " : `Only ${ready} analysed track${ready === 1 ? "" : "s"}. `}
-              <Link href="/library" className="text-accent underline">
-                Open the library
-              </Link>
-            </p>
-          )}
-        </div>
-      </div>
-      <NextMix status={status} color={color} />
-      <Queue status={status} enabled={canPlay} onAdd={() => setPicker({ next: false })} />
-    </section>
+  // Notes from the auto-DJ (and the library link), in a fixed-height strip so the booth never jumps.
+  const notes = (
+    <div className="h-6 truncate text-center text-sm" aria-live="polite">
+      {status.error && <span className="text-bad">{status.error} </span>}
+      {status.note && <span className="text-warn">{status.note} </span>}
+      {!canPlay && hydrated && (
+        <span className="text-muted">
+          {folderState === "none" && ready === 0 ? "No music folder connected. " : `Only ${ready} analysed track${ready === 1 ? "" : "s"}. `}
+          <Link href="/library" className="text-accent underline">
+            Open the library
+          </Link>
+        </span>
+      )}
+    </div>
   );
 
   return (
@@ -293,7 +275,7 @@ export function Booth() {
 
       <TrackStack rows={stackRows} color={color} />
 
-      {screen}
+      {notes}
 
       {/* The controller, laid out like a DDJ-FLX4: Deck A · mixer · Deck B (decks C and D below). */}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem_minmax(0,1fr)]">
@@ -450,166 +432,6 @@ function DropButton({ status, live, color }: { status: AutoDJStatus; live: boole
   );
 }
 
-
-/** Bar, phrase and beat of the live deck. */
-function BeatCounter({ deck, track, color }: { deck: number | null; track: Track | null; color: string }) {
-  const bar = useRef<HTMLSpanElement>(null);
-  const phrase = useRef<HTMLSpanElement>(null);
-  const dots = useRef<(HTMLSpanElement | null)[]>([]);
-  useBoothFrame((snap) => {
-    const view = deck === null ? null : snap?.decks[deck];
-    const a = track?.analysis;
-    if (!view || !a) {
-      setText(bar.current, "—");
-      setText(phrase.current, "—");
-      dots.current.forEach((el) => el && (el.style.opacity = "0.15"));
-      return;
-    }
-    const g = gridPosition(a, view.position);
-    setText(bar.current, g.bar >= 0 ? String(g.bar + 1) : "—");
-    setText(phrase.current, g.bar >= 0 ? `${Math.floor(g.bar / PHRASE_BARS) + 1}.${(g.bar % PHRASE_BARS) + 1}` : "—");
-    dots.current.forEach((el, i) => {
-      if (el) el.style.opacity = g.bar >= 0 && g.beat === i ? "1" : "0.15";
-    });
-  });
-  return (
-    <div className="flex items-center gap-5 font-mono" aria-hidden>
-      <div className="text-center">
-        <span ref={bar} className="block text-2xl font-bold tabular-nums">
-          —
-        </span>
-        <span className="text-[10px] uppercase tracking-wider text-muted">Bar</span>
-      </div>
-      <div className="flex gap-1.5">
-        {[0, 1, 2, 3].map((i) => (
-          <span
-            key={i}
-            ref={(el) => {
-              dots.current[i] = el;
-            }}
-            className="h-3 w-3 rounded-full"
-            style={{ background: i === 0 ? color : "var(--foreground)", opacity: 0.15 }}
-          />
-        ))}
-      </div>
-      <div className="text-center">
-        <span ref={phrase} className="block text-2xl font-bold tabular-nums">
-          —
-        </span>
-        <span className="text-[10px] uppercase tracking-wider text-muted">Phrase</span>
-      </div>
-    </div>
-  );
-}
-
-/** Up-next card: countdown to the mix, then a progress bar while it runs. */
-function NextMix({ status, color }: { status: AutoDJStatus; color: string }) {
-  const when = useRef<HTMLSpanElement>(null);
-  const progress = useRef<HTMLDivElement>(null);
-  useBoothFrame((snap) => {
-    const mix = snap?.mix;
-    if (!mix) {
-      setText(when.current, "");
-      if (progress.current) progress.current.style.transform = "scaleX(0)";
-      return;
-    }
-    if (snap.layering) {
-      const together = status.next?.together;
-      setText(
-        when.current,
-        together
-          ? together.swapAt !== null && snap.now < together.swapAt
-            ? `together · mixes at its drop in ${formatTime(together.swapAt - snap.now)} · or Drop`
-            : "together · Drop to mix"
-          : "layered · Drop to swap",
-      );
-      if (progress.current) progress.current.style.transform = "scaleX(0)";
-    } else if (snap.now < mix.start) {
-      // Desi Night: the song waits for Drop and only mixes by itself near its end.
-      const left = formatTime(mix.start - snap.now);
-      setText(when.current, status.next?.holding ? `waits for Drop · auto in ${left}` : `in ${left}`);
-      if (progress.current) progress.current.style.transform = "scaleX(0)";
-    } else {
-      // A layer's swap: progress from the swap, not from when the layer began.
-      const from = status.next?.transition === "layer" && mix.drop !== undefined ? mix.drop : mix.start;
-      const p = Math.min(1, Math.max(0, (snap.now - from) / Math.max(0.1, mix.end - from)));
-      setText(when.current, `mixing · ${Math.round(p * 100)}%`);
-      if (progress.current) progress.current.style.transform = `scaleX(${p})`;
-    }
-  });
-  // Always there (before Play too), so the column keeps its shape.
-  return (
-    <div className="w-full rounded-2xl border border-border bg-surface/80 p-4 backdrop-blur">
-      <h3 className="text-xs font-medium uppercase tracking-wider text-muted">Up next</h3>
-      {/* The same lines with or without a next song, so the column keeps its height. */}
-      <>
-        <p className="mt-1 truncate font-semibold">
-          {status.next?.track.title ?? <span className="text-muted">{status.playing ? "Choosing…" : "—"}</span>}
-          {status.next?.requested && (
-              <span className="ml-2 rounded px-1.5 py-0.5 align-middle text-[10px] font-bold uppercase" style={{ background: color, color: "#07070b" }}>
-                Requested
-              </span>
-            )}
-          </p>
-        <p className="truncate text-sm text-muted">{status.next ? status.next.track.artist || "Unknown artist" : " "}</p>
-        <p className="mt-2 flex justify-between gap-2 font-mono text-xs text-muted">
-          <span>
-            {!status.next
-              ? " "
-              : status.paused !== null && status.next.transition !== "layer"
-                ? "When you press ▶"
-                : status.loops.some((l) => l.deck === status.now?.deck && !l.armed) && status.next.transition !== "layer"
-                  ? "After the loop"
-                  : status.next.together
-                    ? "Playing together"
-                    : status.next.afterSong
-                      ? "After this song"
-                      : TRANSITION_LABEL[status.next.transition]}
-          </span>
-          <span ref={when} className="tabular-nums" />
-        </p>
-        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-2">
-          <div ref={progress} className="h-full origin-left rounded-full" style={{ background: color, transform: "scaleX(0)" }} />
-        </div>
-      </>
-    </div>
-  );
-}
-
-/** Staff-requested tracks waiting after the next one. */
-function Queue({ status, enabled, onAdd }: { status: AutoDJStatus; enabled: boolean; onAdd: () => void }) {
-  const unrequest = useSession((s) => s.unrequest);
-  return (
-    <div className="w-full rounded-2xl border border-border bg-surface/80 p-4 backdrop-blur">
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-medium uppercase tracking-wider text-muted">Queue {status.queue.length > 0 && `· ${status.queue.length}`}</h3>
-        <button type="button" onClick={onAdd} disabled={!enabled} className="btn">
-          Add track
-        </button>
-      </div>
-      {status.queue.length === 0 ? (
-        <p className="mt-2 text-sm text-muted">Empty — the auto-DJ picks for the mood.</p>
-      ) : (
-        <ol className="mt-2 space-y-1">
-          {status.queue.map((t, i) => (
-            <li key={t.id} className="flex items-center gap-2 text-sm">
-              <span className="w-4 font-mono text-muted">{i + 1}</span>
-              <span className="min-w-0 flex-1 truncate">{t.title}</span>
-              <button
-                type="button"
-                onClick={() => unrequest(t.id)}
-                aria-label={`Remove ${t.title} from the queue`}
-                className="rounded-lg px-2 py-1 text-muted hover:bg-surface-2 hover:text-foreground"
-              >
-                ✕
-              </button>
-            </li>
-          ))}
-        </ol>
-      )}
-    </div>
-  );
-}
 
 /**
  * AI DJ mode. On: the auto-DJ mixes songs nobody has touched (once staff play,

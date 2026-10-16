@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { deckStates, dropButton, loadLibrary, startBooth } from "./helpers";
+import { deckStates, dropButton, loadLibrary, startBooth, upNext } from "./helpers";
 
 const deck = (page: Page, letter: string) => page.getByRole("region", { name: `Deck ${letter}` });
 const states = async (page: Page) => (await deckStates(page)).join(" ");
@@ -11,7 +11,6 @@ const secs = (t: string) => {
   const [m, s] = t.split(":");
   return Number(m) * 60 + Number(s);
 };
-const upNext = (page: Page) => page.getByRole("heading", { name: "Up next" }).locator("..");
 
 test("saved loops: made on the editor's waveform, dragged on the beat, then looping the song on air", async ({ page }) => {
   const errors: string[] = [];

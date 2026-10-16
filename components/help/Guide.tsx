@@ -110,8 +110,9 @@ export function Guide() {
           </p>
           <ul className="list-disc space-y-1.5 pl-5">
             <li>
-              <B>Screen</B> (top): the <B>Mood</B> buttons, the <B>Track view</B>, the bar &amp; phrase counter with notes, <B>Up next</B>{" "}
-              (which song, how it mixes, and when) and the request <B>Queue</B>.
+              <B>Screen</B> (top): the <B>Mood</B> buttons, the <B>Track view</B> (each deck&apos;s bar, phrase and countdowns; the cued
+              deck&apos;s row also says how its song comes in, e.g. &quot;Filter sweep&quot; or &quot;After this song&quot;) and a line for
+              notes from the auto-DJ.
             </li>
             <li>
               <B>Decks</B> left (A) and right (B), each like the controller&apos;s: the <B>loop section</B> (IN, OUT, 4 BEAT / EXIT, ½, 2×) and{" "}
@@ -128,9 +129,12 @@ export function Guide() {
               middle: the <B>AI DJ</B> switch, <B>Drop</B> and <B>Beat FX</B>.
             </li>
             <li>
-              The EQ, CFX and trim knobs, the channel faders and the crossfader <B>move by themselves</B>: they show what the auto-DJ is doing
-              (matching loudness, swapping basslines, filter sweeps, fading songs in and out). You turn only MASTER and PHONES — the auto-DJ
-              does the mixing.
+              <B>Every knob and fader works.</B> TRIM (±12 dB), HI / MID / LOW (full left kills that band, full right +6 dB), CFX (left: a
+              low-pass filter, right: a high-pass, off in the centre), the channel faders and the crossfader (centre: both decks full; each
+              end cuts the other deck). Drag a knob up or down (or scroll, or click it and use the arrow keys); drag or click a fader;
+              double-click either to put it back. They work on top of the auto-DJ, which still beat-matches and mixes underneath: the small
+              dot on each knob&apos;s ring and the tick beside each fader show what the auto-DJ itself is doing. Turn a playing deck all the
+              way down and the mixer says so (&quot;Deck A turned down&quot;) — the auto-DJ treats that silence as yours, not as a fault.
             </li>
             <li>With 3 or 4 decks, decks C and D sit below with their own LOAD and 🎧 CUE.</li>
             <li>The background pulses with the beat in the mood&apos;s colour.</li>
@@ -204,7 +208,7 @@ export function Guide() {
             itself — but only songs you leave alone. Once you play, pause or cue a song yourself (▶, ⏸, CUE, or a hand on its wheel), it
             never mixes that song in or out: it plays to its end and the next song starts then. <B>Off</B>: no automatic mixing at all —
             each song plays to its very end, and the cued song (still the best fit, which you can change) starts the moment it ends, with
-            no blend and nothing overlapping. Up next says <B>After this song</B>. You can still mix by hand with <B>Drop</B> or <B>▶</B>.
+            no blend and nothing overlapping. The cued deck&apos;s row in the track view says <B>After this song</B>. You can still mix by hand with <B>Drop</B> or <B>▶</B>.
             It stays off until you switch it on again.
           </p>
         </Section>
@@ -237,8 +241,7 @@ export function Guide() {
                 "LOAD (mixer)",
                 "For the cued deck (it says Change track): choose the song that comes in next. The picker lists the best fits for the mood first (▶ previews a song on the headphones; “tempo jump” means it will echo out rather than blend).",
               ],
-              ["Add track / Queue", "Requests that play after the next song, in order. Remove one with ✕. The queue survives a reload."],
-              ["Up next", "The next song, how it will mix in, and the countdown to the mix (then its progress)."],
+              ["The cued deck's row", "In the track view: the next song, how it will come in (e.g. Beat-matched blend, Drop, After this song, After the loop) and the countdown to it."],
             ]}
           />
           <Tip>Every request still goes through the auto-DJ: it beat-matches it, picks the transition and steers back to the mood afterwards.</Tip>
@@ -382,7 +385,7 @@ export function Guide() {
               <B>Saved loops</B> (L1–L4, made in the track editor) are the pads in <B>SAVED</B> pad mode. On the song on air, a saved loop
               loops there (if the song is already past it, it jumps there on the beat); on the cued song it is armed, and the song starts from it.
             </li>
-            <li>The auto-DJ&apos;s next mix waits while the song on air loops (Up next says &quot;After the loop&quot;) and is planned again when it ends.</li>
+            <li>The auto-DJ&apos;s next mix waits while the song on air loops (the cued deck&apos;s row says &quot;After the loop&quot;) and is planned again when it ends.</li>
             <li>
               Pressing <B>Drop</B>, ⏸ or a cue pad ends the loop — loop a few beats, then Drop is a classic build-up.
             </li>

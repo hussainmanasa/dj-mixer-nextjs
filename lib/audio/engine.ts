@@ -7,6 +7,7 @@ import { MAX_DECKS, MIN_DECKS } from "@/lib/types";
 import { Deck } from "./deck";
 import { MasterFx } from "./fx";
 import { createKeyLock, KEYLOCK_DELAY_SAMPLES, loadKeyLock } from "./keylock";
+import { channelGainOf, crossfaderGains, NEUTRAL_CHANNEL, type MixerChannel } from "./mixer";
 import { listOutputs, routeTo } from "./outputs";
 import { Scratch } from "./scratch";
 import { volumeGain } from "./volume";
@@ -28,6 +29,9 @@ export class AudioEngine {
   readonly decks: Deck[];
   /** Key-lock is on for every deck. */
   private keyLockOn = false;
+  /** The staff mixer: each channel's knobs and fader (by deck index), and the crossfader (decks A and B). */
+  private readonly channels: MixerChannel[] = Array.from({ length: MAX_DECKS }, () => ({ ...NEUTRAL_CHANNEL }));
+  private crossfader = 0.5;
   private readonly levelBuf: Float32Array<ArrayBuffer>;
   private readonly watchBuf: Float32Array<ArrayBuffer>;
 
@@ -77,12 +81,41 @@ export class AudioEngine {
     return ok;
   }
 
+  /** Which side of the crossfader a deck is on: A left, B right; C and D aren't on it. */
+  private side(index: number): 0 | 1 | null {
+    return index === 0 ? 0 : index === 1 ? 1 : null;
+  }
+
+  private sideGain(index: number): number {
+    const side = this.side(index);
+    return side === null ? 1 : crossfaderGains(this.crossfader)[side];
+  }
+
+  /** Staff moved a channel's knobs or fader. */
+  setMixer(index: number, ch: MixerChannel): void {
+    if (index < 0 || index >= MAX_DECKS) return;
+    this.channels[index] = { ...ch };
+    this.decks[index]?.setMixer(this.channels[index], this.sideGain(index));
+  }
+
+  /** Staff moved the crossfader (0 = Deck A only … 0.5 = both … 1 = Deck B only). */
+  setCrossfader(x: number): void {
+    this.crossfader = Math.max(0, Math.min(1, x));
+    for (const d of this.decks.slice(0, 2)) d.setMixer(this.channels[d.index], this.sideGain(d.index));
+  }
+
+  /** The gain staff's fader and crossfader leave a deck at (near 0: they turned it down on purpose). */
+  channelGain(index: number): number {
+    return channelGainOf(this.channels[index] ?? NEUTRAL_CHANNEL, this.crossfader, this.side(index));
+  }
+
   /** Add decks up to `count` (also while playing). Returns the new ones. */
   addDecks(count: number): Deck[] {
     const added: Deck[] = [];
     while (this.decks.length < Math.min(MAX_DECKS, count)) {
       const d = new Deck(this.ctx, this.master, this.decks.length);
       if (this.keyLockOn) d.setKeyLock(createKeyLock(this.ctx));
+      d.setMixer(this.channels[d.index], this.sideGain(d.index), 0);
       this.decks.push(d);
       added.push(d);
     }

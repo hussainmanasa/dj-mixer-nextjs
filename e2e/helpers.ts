@@ -26,6 +26,9 @@ export async function startBooth(page: Page, mood = "Peak Hour"): Promise<void> 
 
 }
 
+/** The cued song's row in the track view (its title, and how it comes in — the old Up next card). */
+export const upNext = (page: Page) => page.getByRole("group", { name: /^Track view, Deck/ }).filter({ has: page.getByTestId("up-next") });
+
 export const dropButton = (page: Page) => page.locator('button[title="Bring the next track in on its drop"]');
 
 /** Deck panels as "A:<state> <time> <title>". */

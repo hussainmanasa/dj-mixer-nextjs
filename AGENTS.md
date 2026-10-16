@@ -65,8 +65,10 @@ Full product plan: https://claude.ai/code/artifact/903692c7-9f12-49a9-9de1-5a82b
    (Owner, latest) The booth is **laid out like a Pioneer DDJ-FLX4**: Deck A · mixer · Deck B under the "screen"
    (moods, track view, Up next, queue); loop section (IN / OUT / 4 BEAT / ½ / 2×), pad modes (HOT CUE, BEAT LOOP,
    SAVED) and round CUE / ▶ buttons on each deck; LOAD, 🎧 CUE, MASTER / PHONES knobs, AI DJ, Drop and Beat FX in the
-   mixer. The mixer's TRIM / EQ / CFX knobs, channel faders and crossfader are **display only** (they show the
-   auto-DJ's automation) — no manual EQ, faders or crossfader, as above.
+   mixer. (Owner, latest — supersedes "no crossfader, per-deck EQ/faders" below.) **Every mixer control works**:
+   TRIM, HI / MID / LOW, CFX, the channel faders and the crossfader. They act on a separate staff stage after the
+   auto-DJ's automation (`Deck.setMixer`), so the auto-DJ still beat-matches and mixes underneath; a dot on each
+   knob and a tick by each fader show what the auto-DJ is doing.
    Every action goes through `AutoDJ`: it still beat-matches, chooses the transition, times it on the grid
    and steers back to the mood. Do not add manual decks, crossfader, per-deck EQ/faders, skip/seek or an
    energy slider, and never let UI write to deck automation directly.
@@ -168,18 +170,32 @@ the mood wants, or analysed before `ANALYSIS_VERSION` 2, fall back to mixing out
 Bump `ANALYSIS_VERSION` (`bpm.ts`) when `TrackAnalysis` gains fields: the Library page re-analyses older
 tracks in the background and they stay playable meanwhile.
 
-Booth layout (DDJ-FLX4): `Booth` renders the "screen" (mood buttons, `TrackStack`, `BeatCounter` + notes, `NextMix`,
-`Queue`) above the controller grid `[Deck A][Mixer 22rem][Deck B]` (stacked below `lg`; decks C / D in a row below,
+Staff mixer (`lib/audio/mixer.ts` PURE + tested; `Deck.setMixer`, `AudioEngine.setMixer / setCrossfader`,
+`AutoDJ.setMixer / setCrossfader`, `useSession.mixer / crossfader / setMixer / setCrossfader`): each deck runs
+source → trim → EQ → filter → fader (the auto-DJ's automation, untouched) → **staff stage** (TRIM ±12 dB → lowshelf /
+peaking / highshelf EQ, −26 dB kill … +6 dB → CFX biquad: low-pass 20 kHz → 150 Hz to the left, high-pass 20 Hz →
+6 kHz to the right, open in the centre → channel fader (squared taper) × crossfader) → out. The echo send feeds the
+staff stage too. Values glide over ~15 ms (`setTargetAtTime`). The crossfader is a "sharp" curve: centre = both
+full, each end cuts the other side; decks C / D aren't on it. Settings belong to the channel (they stay when a new
+song loads), live in the session store (set before Play too; applied in `ensureDj`) and reset on reload. The
+silence watchdog stands down while the song on air's staff gain (`engine.channelGain`) is below `STAFF_MUTED`
+(staff turned it down on purpose); the mixer then says "Deck A turned down — the club doesn't hear it". The level
+meters tap after the staff stage. UI: `Knob` (drag up / down, scroll, keys, double-click to centre, a range input
+under the face) and `Fader` (drag or click the track, keys, double-click to reset), both with an `auto` indicator.
+
+Booth layout (DDJ-FLX4): `Booth` renders the "screen" (mood buttons, `TrackStack`, a fixed-height notes line) above
+the controller grid `[Deck A][Mixer 22rem][Deck B]` (stacked below `lg`; decks C / D in a row below,
 each with its own `LoadButton` / `ListenButtons` in the deck's `strip`). `DeckPanel`: `LoopSection` (IN / OUT set a
 loop by hand through `savedLoop`, 4 BEAT / EXIT, ½ / 2× resize the loop via `loop(beats)` or `savedLoop`), BEAT SYNC,
 the display (badge, ⏏, song, BPM, time, `TrackOverview`, Start from), the jog with the tempo slider, `Transport` (round
 CUE / ▶ ⏸) and `PadSection` (modes HOT CUE → `CuePads`, BEAT LOOP → ¼…32 beats, SAVED → saved loops; Clear in the mode
 row). `Mixer`: `VolumeKnob`s (a range input under a rotary face, so keys / `fill` work) for MASTER / PHONES around
 `PlayStopButton`, the master `LevelMeter`, `LoadButton`s (aria "Load track, Deck A" …), `ChannelKnobs` (display
-`setKnob` from `DeckView.trimDb / highDb / midDb / bassDb / cfx`), AI DJ / Drop / `FxPad` down the middle,
-`ListenButtons` (aria "Listen, Deck A", "Set start here, Deck A"), and `Faders` (caps from `DeckView.fader`, meters from
-`DeckView.level` = `Deck.level()`, an analyser after each fader; the crossfader at `0.5 + (fB − fA) / 2`). The knobs and
-faders are display only (decision 2). `e2e/controller.spec.ts` checks the layout, the moving mixer and the loop section.
+the auto-DJ's dots via `setKnob` from `DeckView.trimDb / highDb / midDb / bassDb / cfx`), AI DJ / Drop / `FxPad` down the middle,
+`ListenButtons` (aria "Listen, Deck A", "Set start here, Deck A"), and `Faders` (staff channel faders and crossfader,
+the auto-DJ's fade as a tick from `DeckView.fader`, meters from `DeckView.level` = `Deck.level()`, an analyser after
+the staff stage). `e2e/controller.spec.ts` checks the layout, the loop section and that every mixer control changes
+the sound.
 
 Booth display: the booth shows every deck as the auto-DJ runs it — spinning jog wheel (turns with the track
 position, so tempo sync is visible), beat ring, fader and bass meters, track overview with drops and the next
@@ -680,10 +696,17 @@ device, and starts `next start -p 3100` (build first). Audio runs for real; noth
 - With no separate preview output, previews and the mix share one device, so the two volumes set two sounds on the
   same speakers (the headphones slider then only changes previews).
 - The editor preview doesn't apply key-lock or volume matching, so it can sound slightly different from the booth.
-- The FLX4 layout is visual only: there's no SHIFT layer, no PAD FX / BEAT JUMP / SAMPLER pad modes, and the mixer's
-  EQ / CFX / faders / crossfader can't be moved by hand (they mirror the auto-DJ). A real DDJ-FLX4 over MIDI isn't
-  supported (no MIDI, by owner decision). The crossfader shows the balance of the two channel faders, not a real
-  crossfader curve. IN / OUT loops snap to the nearest beat.
+- The bar counter, Up next card and request Queue were removed (owner: of no use). The track view shows bars, phrases
+  and countdowns; the cued row's `nextHow()` line (`data-testid="up-next"`) says how the next song comes in. With no
+  Queue there's no "Add track": staff choose the next song with LOAD (or load decks before Play); the request queue
+  still exists inside the AutoDJ (loaded decks after Deck A go there, and it is still saved for auto-resume).
+- The FLX4 layout has no SHIFT layer and no PAD FX / BEAT JUMP / SAMPLER pad modes. A real DDJ-FLX4 over MIDI isn't
+  supported (no MIDI, by owner decision). IN / OUT loops snap to the nearest beat.
+- The staff mixer adds to the auto-DJ's mix rather than replacing it: e.g. the auto-DJ still fades a song out even if
+  its channel fader is up, and a crossfader left at one end cuts the other deck when the auto-DJ mixes into it (the
+  booth warns, and the watchdog doesn't treat it as a failure). Decks C / D have no knobs or faders (the mixer has
+  two channels). Mixer settings aren't saved across a reload. The CFX switches filter type at the centre (both wide
+  open there, so it's inaudible).
 - Two songs play together on two decks (the playing and the cued); a third song over them, or an a-cappella crate on
   decks C/D, isn't built; nor is vocal separation (needs an ML model). Clashing keys aren't pitch-shifted.
 - ▶ starts on the next beat (not the next phrase), matched to the bar; a song resumed into a pair starts from its own
