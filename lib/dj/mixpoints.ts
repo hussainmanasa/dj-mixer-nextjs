@@ -153,3 +153,24 @@ export function dropCue(a: TrackAnalysis): number {
   const introBars = Math.floor((a.introEnd - a.firstBeat) / bar);
   return a.firstBeat + Math.max(0, introBars) * bar;
 }
+
+/**
+ * Where the transition out of a song starts. With a cue out (`cueOut`, set in the
+ * track editor) the transition starts `leadBars` before it, so its hand-over (a
+ * blend's bass swap) lands on the cue out — as long as that is still ahead of
+ * `notBefore`; otherwise, and without one, `mixOutPoint` decides.
+ */
+export function mixOutFor(
+  a: TrackAnalysis,
+  cueOut: number | undefined,
+  blendBars: number,
+  notBefore = 0,
+  rule?: MixOutRule,
+  leadBars = Math.floor(blendBars / 2),
+): number {
+  if (cueOut !== undefined) {
+    const start = cueOut - leadBars * barSeconds(a);
+    if (start >= notBefore) return start;
+  }
+  return mixOutPoint(a, blendBars, notBefore, rule, leadBars);
+}

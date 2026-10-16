@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { drops } from "@/lib/analysis/structure";
 import { libraryLoudness, trimDb } from "@/lib/analysis/loudness";
+import { folderPaths, folderTree, SESSION_FOLDER, type FolderNode } from "@/lib/library/folders";
 import { duplicateCounts, trackIssues, type Issue } from "@/lib/library/issues";
 import type { Track } from "@/lib/types";
 import { useLibrary } from "@/store/library";
@@ -10,13 +11,21 @@ import { TrackEditor } from "./TrackEditor";
 
 type Filter = "all" | "attention" | "favourite" | "ban";
 
-/** Every track with its analysis, filters for problems and admin flags, and the track editor. */
+/**
+ * Every track with its analysis, filters for problems and admin flags, and the
+ * track editor. Folders view (default) shows the music folder as it is on disk —
+ * folders and subfolders that open and close, each with its songs and how far
+ * their analysis has got; List view is every song in one list.
+ */
 export function TrackTable() {
   const tracks = useLibrary((s) => s.tracks);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [crate, setCrate] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
+  const [view, setView] = useState<"folders" | "list">("folders");
+  // Folders start closed — except the files just added for this session.
+  const [open, setOpen] = useState<Set<string>>(() => new Set([SESSION_FOLDER]));
 
   const list = useMemo(() => Object.values(tracks).sort((a, b) => a.path.localeCompare(b.path)), [tracks]);
   const target = useMemo(() => libraryLoudness(list.map((t) => t.analysis?.loudness)), [list]);
@@ -44,6 +53,28 @@ export function TrackTable() {
         (filter === "all" || (filter === "attention" ? !!issues.get(t.id)?.length : t.flag === filter)),
     );
   }, [list, query, crate, filter, issues]);
+
+  const tree = useMemo(() => folderTree(shown), [shown]);
+  // Searching or filtering opens every folder that has a match.
+  const narrowed = !!query.trim() || filter !== "all" || !!crate;
+  const isOpen = (path: string) => narrowed || open.has(path);
+  const toggle = (path: string) =>
+    setOpen((o) => {
+      const next = new Set(o);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  const rowFor = (t: Track, depth: number) => (
+    <TrackRow key={t.id} track={t} depth={depth} target={target} issues={issues.get(t.id) ?? []} onEdit={() => setEditing(t.id)} />
+  );
+  const folderRows = (f: FolderNode, depth: number): React.ReactNode[] =>
+    f.folders.map((c) => (
+      <Fragment key={c.path}>
+        <FolderRow folder={c} depth={depth} open={isOpen(c.path)} onToggle={() => toggle(c.path)} />
+        {isOpen(c.path) && [...folderRows(c, depth + 1), ...c.tracks.map((t) => rowFor(t, depth + 1))]}
+      </Fragment>
+    ));
 
   const tabs: [Filter, string, number][] = [
     ["all", "All", list.length],
@@ -82,6 +113,30 @@ export function TrackTable() {
             </button>
           ))}
         </div>
+        <div className="ml-auto flex items-center gap-1" role="radiogroup" aria-label="View">
+          {(["folders", "list"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="radio"
+              aria-checked={view === v}
+              onClick={() => setView(v)}
+              className={`rounded-lg px-3 py-2 text-sm ${view === v ? "bg-surface-2 text-foreground" : "text-muted hover:text-foreground"}`}
+            >
+              {v === "folders" ? "Folders" : "List"}
+            </button>
+          ))}
+          {view === "folders" && tree.folders.length > 0 && (
+            <>
+              <button type="button" className="btn" onClick={() => setOpen(new Set(folderPaths(tree)))} disabled={narrowed}>
+                Expand all
+              </button>
+              <button type="button" className="btn" onClick={() => setOpen(new Set())} disabled={narrowed}>
+                Collapse all
+              </button>
+            </>
+          )}
+        </div>
         {crates.length > 0 && (
           <select
             value={crate}
@@ -112,9 +167,7 @@ export function TrackTable() {
             </tr>
           </thead>
           <tbody>
-            {shown.map((t) => (
-              <TrackRow key={t.id} track={t} target={target} issues={issues.get(t.id) ?? []} onEdit={() => setEditing(t.id)} />
-            ))}
+            {view === "list" ? shown.map((t) => rowFor(t, 0)) : [...folderRows(tree, 0), ...tree.tracks.map((t) => rowFor(t, 0))]}
             {shown.length === 0 && (
               <tr>
                 <td colSpan={9} className="px-5 py-10 text-center text-muted">
@@ -132,12 +185,60 @@ export function TrackTable() {
 
 const KEY_SOURCE: Record<NonNullable<Track["keySource"]>, string> = { tag: "", audio: "detected", manual: "set by hand" };
 
-function TrackRow({ track: t, target, issues, onEdit }: { track: Track; target: number; issues: Issue[]; onEdit: () => void }) {
+/** A folder in the Folders view: opens and closes, with its song count and analysis progress (it and below). */
+function FolderRow({ folder: f, depth, open, onToggle }: { folder: FolderNode; depth: number; open: boolean; onToggle: () => void }) {
+  const { total, ready, pending, error } = f.counts;
+  const done = ready + error;
+  return (
+    <tr className="border-t border-border bg-surface-2/40">
+      <td colSpan={9} className="py-1.5 pr-5" style={{ paddingLeft: 20 + depth * 20 }}>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          className="flex w-full items-center gap-2 text-left"
+          aria-label={`${open ? "Close" : "Open"} folder ${f.name}`}
+        >
+          <span className="w-3 text-muted" aria-hidden>
+            {open ? "▾" : "▸"}
+          </span>
+          <span aria-hidden>📁</span>
+          <span className="truncate font-semibold">{f.name}</span>
+          <span className="shrink-0 text-xs text-muted">
+            {total} song{total === 1 ? "" : "s"}
+            {pending > 0 && <span> · {pending} analysing</span>}
+            {error > 0 && <span className="text-bad"> · {error} failed</span>}
+          </span>
+          {pending > 0 && (
+            <span className="ml-auto h-1.5 w-32 shrink-0 overflow-hidden rounded-full bg-surface" aria-hidden>
+              <span className="block h-full bg-accent" style={{ width: `${(done / Math.max(1, total)) * 100}%` }} />
+            </span>
+          )}
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+function TrackRow({
+  track: t,
+  depth = 0,
+  target,
+  issues,
+  onEdit,
+}: {
+  track: Track;
+  /** Folders view: how deep it sits (indents the title). */
+  depth?: number;
+  target: number;
+  issues: Issue[];
+  onEdit: () => void;
+}) {
   const a = t.analysis;
   const trim = a ? trimDb(a.loudness, target) : 0;
   return (
     <tr className={`border-t border-border ${t.flag === "ban" ? "opacity-50" : ""}`}>
-      <td className="max-w-xs px-5 py-2" title={t.path}>
+      <td className="max-w-xs py-2 pr-5" title={t.path.replace(/^session:/, "")} style={{ paddingLeft: 20 + depth * 20 + (depth > 0 ? 16 : 0) }}>
         <p className="truncate">
           {t.flag === "favourite" && <span className="mr-1 text-warn" aria-label="Favourite">★</span>}
           {t.flag === "ban" && <span className="mr-1 text-bad" aria-label="Never play">⛔</span>}

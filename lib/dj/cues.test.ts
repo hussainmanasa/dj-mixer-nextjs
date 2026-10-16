@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Track } from "@/lib/types";
 import { getMood } from "./moods";
-import { defaultStart, entryOptions, firstStart, layerEntry, openerWindow, resolveEntry, snapToBar, validateCues } from "./cues";
+import { barAt, barLabel, beatBar, cuePlan, defaultStart, entryOptions, firstStart, layerEntry, openerWindow, resolveEntry, snapToBar, validateCues } from "./cues";
 import { canLayer, pickOpener } from "./selector";
 
 // 120 BPM → 2 s bars from 0.5 s; drops at bars 64 (and 112).
@@ -125,5 +125,44 @@ describe("layering", () => {
     expect(layerEntry(track("plain"))).toBe(128.5);
     expect(layerEntry(hooked, { kind: "drop" })).toBe(128.5);
     expect(layerEntry(hooked, { kind: "bar", bar: 4 })).toBe(8.5);
+  });
+});
+
+describe("cue", () => {
+  const marked = track("m", { cues: { dialogueStart: 1.2, dialogueEnd: 6.4, hookStart: 20.5, hookEnd: 52.5 } });
+  it("plays from where the deck will start, through a dialogue's jump", () => {
+    expect(cuePlan(marked, { kind: "auto" }, false)).toEqual({ from: 1.2, jump: { at: 6.4, to: 128.5 } });
+    expect(cuePlan(marked, { kind: "drop" }, false)).toEqual({ from: 128.5 });
+    expect(cuePlan(marked, { kind: "auto" }, true, true)).toEqual({ from: 20.5 });
+    expect(cuePlan(marked, { kind: "dialogue" }, true)).toEqual({ from: 1.2, jump: { at: 6.4, to: 128.5 } });
+  });
+  it("turns a playhead into the nearest bar", () => {
+    expect(barAt(marked.analysis!, 21.2)).toBe(10);
+    expect(barAt(marked.analysis!, 0.1)).toBe(0);
+  });
+});
+
+describe("jog wheel start points", () => {
+  const a = track("t").analysis!; // 120 BPM: 0.5 s beats, 2 s bars from 0.5 s
+  it("snaps to the nearest beat as a fractional bar", () => {
+    expect(beatBar(a, 20.5)).toBe(10);
+    expect(beatBar(a, 21.05)).toBe(10.25);
+    expect(beatBar(a, 0.1)).toBe(0);
+  });
+  it("labels bar and beat from 1", () => {
+    expect(barLabel(10)).toBe("Bar 11.1");
+    expect(barLabel(10.25)).toBe("Bar 11.2");
+    expect(barLabel(10.75)).toBe("Bar 11.4");
+  });
+  it("a fractional bar entry starts on that beat", () => {
+    expect(resolveEntry(track("t"), { kind: "bar", bar: 10.25 }).land).toBeCloseTo(21, 6);
+  });
+});
+
+describe("cue out", () => {
+  it("must come after the cue in and sit inside the song", () => {
+    expect(validateCues({ start: 10, end: 8 }, 200)).toContain("The cue out must come after the cue in.");
+    expect(validateCues({ start: 10, end: 300 }, 200)).toContain("Markers must be inside the song.");
+    expect(validateCues({ start: 10, end: 180 }, 200)).toEqual([]);
   });
 });

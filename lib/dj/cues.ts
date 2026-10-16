@@ -80,7 +80,8 @@ export function openerWindow(track: Track): { start: number; end: number } {
 export function validateCues(c: TrackCues, duration: number): string[] {
   const errors: string[] = [];
   const inside = (v: number | undefined) => v === undefined || (v >= 0 && v <= duration);
-  if (![c.start, c.hookStart, c.hookEnd, c.dialogueStart, c.dialogueEnd].every(inside)) errors.push("Markers must be inside the song.");
+  if (![c.start, c.end, c.hookStart, c.hookEnd, c.dialogueStart, c.dialogueEnd].every(inside)) errors.push("Markers must be inside the song.");
+  if (c.start !== undefined && c.end !== undefined && c.end <= c.start) errors.push("The cue out must come after the cue in.");
   if (c.hookStart !== undefined && c.hookEnd !== undefined && c.hookEnd <= c.hookStart) errors.push("The hook must end after it starts.");
   if (c.dialogueStart !== undefined && c.dialogueEnd !== undefined && c.dialogueEnd <= c.dialogueStart)
     errors.push("The dialogue must end after it starts.");
@@ -139,3 +140,40 @@ export function layerEntry(track: Track, choice: EntryChoice = { kind: "auto" })
   if (choice.kind === "beginning" || choice.kind === "drop" || choice.kind === "bar") return resolveEntry(track, choice).land;
   return hookOf(track.cues)?.start ?? dropCue(track.analysis!);
 }
+
+/** What Cue plays for a deck: from where it will start, through its dialogue's jump to the drop if any. */
+export interface CuePlan {
+  from: number;
+  jump?: { at: number; to: number };
+}
+
+/**
+ * Cue for a loaded or cued deck: from its start point — Deck A's first start
+ * (`first`, with `opener` for opener moods) or how a later deck comes in.
+ */
+export function cuePlan(track: Track, choice: EntryChoice, first: boolean, opener = false): CuePlan {
+  if (first) {
+    const fs = firstStart(track, choice, opener);
+    return fs.jump ? { from: fs.start, jump: { at: fs.start + fs.jump.after, to: fs.jump.to } } : { from: fs.start };
+  }
+  const e = resolveEntry(track, choice);
+  return e.dialogue ? { from: e.dialogue.start, jump: { at: e.dialogue.end, to: e.land } } : { from: e.land };
+}
+
+/** The bar (from the first downbeat) nearest a track position — for "Set start here". */
+export function barAt(a: TrackAnalysis, position: number): number {
+  return Math.max(0, Math.round((position - a.firstBeat) / barSeconds(a)));
+}
+
+/** A track position snapped to the nearest beat, as a (fractional) bar from the first downbeat: 10.25 = bar 11, beat 2. */
+export function beatBar(a: TrackAnalysis, position: number): number {
+  const beat = barSeconds(a) / 4;
+  return Math.max(0, Math.round((position - a.firstBeat) / beat)) / 4;
+}
+
+/** "Bar 11.2" for a fractional bar (bar 11, beat 2), counting from 1. */
+export function barLabel(bar: number): string {
+  const whole = Math.floor(bar + 1e-9);
+  return `Bar ${whole + 1}.${Math.round((bar - whole) * 4) + 1}`;
+}
+

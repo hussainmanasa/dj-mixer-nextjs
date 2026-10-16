@@ -14,8 +14,22 @@ type Subscriber = (snap: BoothSnapshot | null) => void;
 const subscribers = new Set<Subscriber>();
 let raf = 0;
 
+/**
+ * Where a hand is turning a deck's jog wheel right now (deck index → track seconds). The wheel updates it on every
+ * move, so the whole display (track view, the deck's time and overview) follows the wheel while it turns, not only
+ * once it's let go. Display only.
+ */
+export const jogScrub = new Map<number, number>();
+
 function loop() {
   const snap = useSession.getState().snapshot();
+  // A playing (or held) deck under the hand: show where the wheel has it.
+  if (snap && jogScrub.size) {
+    for (const [deck, position] of jogScrub) {
+      const view = snap.decks[deck];
+      if (view?.started) snap.decks[deck] = { ...view, position };
+    }
+  }
   for (const fn of subscribers) fn(snap);
   raf = requestAnimationFrame(loop);
 }

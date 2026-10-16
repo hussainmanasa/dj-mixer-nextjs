@@ -3,28 +3,20 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { SCHEDULE_MARGIN, STOP_FADE_SECONDS, type AutoDJStatus } from "@/lib/dj/autodj";
-import { firstStart, resolveEntry } from "@/lib/dj/cues";
-import { gridPosition, PHRASE_BARS } from "@/lib/dj/mixpoints";
+import { cuePlan, firstStart, resolveEntry } from "@/lib/dj/cues";
+import { gridPosition } from "@/lib/dj/mixpoints";
 
-import type { Track, TransitionKind } from "@/lib/types";
-import { readyTracks, useLibrary, useMoods } from "@/store/library";
+import type { EntryChoice, Track } from "@/lib/types";
+import { previewIsSeparate, readyTracks, useLibrary, useMoods } from "@/store/library";
 import { useSession } from "@/store/session";
 import { DeckPanel, type DeckRole } from "./DeckPanel";
+import { ListenButtons, LoadButton, Mixer, type Channel } from "./Mixer";
+import { TrackStack, type StackRow } from "./TrackStack";
 import { formatTime, setText, useBoothFrame } from "./frame";
 import { FxPad } from "./FxPad";
 import { TrackPicker } from "./TrackPicker";
 import { MOOD_COLOR } from "./theme";
 
-const TRANSITION_LABEL: Record<TransitionKind, string> = {
-  blend: "Beat-matched blend",
-  filterSweep: "Filter sweep",
-  echoOut: "Echo-out",
-  cut: "Cut on the downbeat",
-  drop: "Drop",
-  dialogue: "Dialogue → drop",
-  rewind: "Rewind",
-  layer: "Layer",
-};
 
 function deckRole(status: AutoDJStatus, deck: number): { role: DeckRole; track: Track | null } {
   if (status.now?.deck === deck) return { role: "live", track: status.now.track };
@@ -46,6 +38,8 @@ export function Booth() {
   const folderState = useLibrary((s) => s.folderState);
   const analysis = useLibrary((s) => s.analysis);
   const settingsDecks = useLibrary((s) => s.settings.deckCount);
+  // Cue during a set needs its own output, or the club would hear it.
+  const previewSeparate = useLibrary((s) => previewIsSeparate(s.settings));
   const ready = readyTracks(tracks).length;
 
   const status = useSession((s) => s.status);
@@ -64,7 +58,7 @@ export function Booth() {
   }, [canPlay, folderState, resumeAvailable, tryAutoResume]);
 
   // Track picker: `next` replaces the cued track, otherwise it adds to the queue.
-  const [picker, setPicker] = useState<{ next: boolean; loadDeck?: number; layer?: boolean } | null>(null);
+  const [picker, setPicker] = useState<{ next: boolean; loadDeck?: number } | null>(null);
   const preloads = useSession((s) => s.preloads);
   const ejectDeck = useSession((s) => s.ejectDeck);
   const setPreloadEntry = useSession((s) => s.setPreloadEntry);
@@ -74,36 +68,54 @@ export function Booth() {
   const mood = moods.find((m) => m.id === status.mood)!;
   const color = MOOD_COLOR[status.mood];
   // On air and not fading out: the only time Drop, effects and track choice make sense.
-  const live = status.playing && !stopping;
+  // Paused: Drop, Layer and effects wait for ▶.
+  const live = status.playing && !stopping && !status.silent;
   const deckCount = status.playing ? status.deckCount : settingsDecks;
-  const decks = Array.from({ length: deckCount }, (_, i) => {
-    // Before Play, staff can load a song into any deck (Deck A plays first, the rest next in order).
-    const preload = !status.playing && !starting ? (preloads[i] ?? null) : null;
+  // Where a song loaded before Play starts: Deck A where the set starts, the others where they'll come in.
+  const preloadStart = (i: number, p: NonNullable<(typeof preloads)[number]>) =>
+    i === 0 ? firstStart(p.track, p.entry, !!mood.opener).start : ((e) => e.dialogue?.start ?? e.land)(resolveEntry(p.track, p.entry));
+  // Track view: the decks' songs one below another (loaded ones before Play; on air and cued during the set).
+  // A row for every deck (empty ones too), so the view never changes height.
+  const stackRows: StackRow[] = Array.from({ length: deckCount }, (_, i): StackRow => {
     if (!status.playing && !starting) {
-      return (
-        <DeckPanel
-          key={i}
-          deck={i}
-          role={preload ? "loaded" : "idle"}
-          track={preload?.track ?? null}
-          color={color}
-          onChoose={canPlay ? { label: preload ? "Change" : "Load track", open: () => setPicker({ next: false, loadDeck: i }) } : undefined}
-          onEject={preload ? () => ejectDeck(i) : undefined}
-          entry={
-            preload
-              ? {
-                  choice: preload.entry,
-                  // Deck A: where the set starts. Later decks: where they'll come in (before any build-up).
-                  startAt:
-                    i === 0
-                      ? firstStart(preload.track, preload.entry, !!mood.opener).start
-                      : ((e) => e.dialogue?.start ?? e.land)(resolveEntry(preload.track, preload.entry)),
-                  set: (choice) => setPreloadEntry(i, choice),
-                }
-              : undefined
+      const p = preloads[i];
+      return p ? { deck: i, track: p.track, role: "loaded", startAt: preloadStart(i, p) } : { deck: i, track: null, role: "idle" };
+    }
+    const { role, track } = deckRole(status, i);
+    if (!track || (role !== "live" && role !== "incoming")) return { deck: i, track: null, role };
+    return { deck: i, track, role, startAt: role === "incoming" ? status.next?.startAt : undefined };
+  });
+  // Each deck's panel props and its mixer channel (LOAD, 🎧 CUE). Before Play staff can load a song into any
+  // deck (Deck A plays first, the rest next in order).
+  const setup = Array.from({ length: deckCount }, (_, i): { panel: Parameters<typeof DeckPanel>[0]; channel: Channel } => {
+    if (!status.playing && !starting) {
+      const preload = preloads[i] ?? null;
+      const entry = preload
+        ? {
+            choice: preload.entry,
+            // Deck A: where the set starts. Later decks: where they'll come in (before any build-up).
+            startAt: preloadStart(i, preload),
+            set: (choice: EntryChoice) => setPreloadEntry(i, choice),
           }
-        />
-      );
+        : undefined;
+      return {
+        panel: {
+          deck: i,
+          role: preload ? "loaded" : "idle",
+          track: preload?.track ?? null,
+          color,
+          onEject: preload ? () => ejectDeck(i) : undefined,
+          entry,
+          onStart: preload && canPlay ? () => void play(i) : undefined,
+        },
+        channel: {
+          deck: i,
+          track: preload?.track ?? null,
+          choose: canPlay ? { label: preload ? "Change" : "Load track", open: () => setPicker({ next: false, loadDeck: i }) } : undefined,
+          cue: preload ? { plan: cuePlan(preload.track, preload.entry, i === 0, !!mood.opener), blocked: false } : undefined,
+          entry,
+        },
+      };
     }
     const { role, track } = deckRole(status, i);
     const choose =
@@ -112,58 +124,121 @@ export function Booth() {
         : role === "standby"
           ? { label: "Queue track", open: () => setPicker({ next: false }) }
           : { label: track ? "Change track" : "Choose track", open: () => setPicker({ next: true }) };
-    return (
-      <DeckPanel
-        key={i}
-        deck={i}
-        role={role}
-        track={track}
-        color={color}
-        onChoose={choose}
-        keyLock={status.playing && status.keyLock}
-        entry={role === "incoming" && status.next && !stopping ? { choice: status.next.entry, startAt: status.next.startAt, set: setEntry } : undefined}
-      />
-    );
+    const entry = role === "incoming" && status.next && !stopping ? { choice: status.next.entry, startAt: status.next.startAt, set: setEntry } : undefined;
+    return {
+      panel: {
+        deck: i,
+        role,
+        track,
+        color,
+        keyLock: status.playing && status.keyLock,
+        entry,
+        // ⏏ during the set: the next song's deck (the panel greys it out while that song plays).
+        onEject: role === "incoming" && !stopping ? () => ejectDeck(i) : undefined,
+        transport:
+          status.playing && !stopping
+            ? {
+                setPaused: status.silent,
+                thisPaused: status.paused === i || status.pausedAlong === i,
+                tempo: role === "incoming" ? status.next?.tempo : undefined,
+                cuePoint: status.cuePoints[i] ?? null,
+              }
+            : undefined,
+      },
+      channel: {
+        deck: i,
+        track,
+        choose,
+        cue: role === "incoming" && status.next && !stopping ? { plan: cuePlan(status.next.track, status.next.entry, false), blocked: !previewSeparate } : undefined,
+        entry,
+      },
+    };
   });
+  // Decks C and D (3–4 decks): the mixer has two channels, so they carry their own LOAD and 🎧 CUE.
+  const deckPanel = (i: number) => (
+    <DeckPanel
+      key={i}
+      {...setup[i].panel}
+      strip={
+        i >= 2 ? (
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <LoadButton channel={setup[i].channel} />
+            <ListenButtons channel={setup[i].channel} />
+          </div>
+        ) : undefined
+      }
+    />
+  );
 
-  const centre = (
-    <section className="flex flex-col items-center gap-5">
-      <PlayStopButton
-        playing={status.playing}
-        starting={starting}
-        stopping={stopping}
-        disabled={!canPlay}
-        onPlay={play}
-        onStop={stop}
-      />
-      <DropButton status={status} live={live} color={color} />
-      <LayerButton status={status} live={live} color={color} onPick={() => setPicker({ next: false, layer: true })} />
-      <FxPad enabled={live && !!status.now} color={color} />
-      <LevelMeter color={color} />
-      {status.now && <BeatCounter deck={status.now.deck} track={status.now.track} color={color} />}
+  const mixer = (
+    <Mixer
+      channels={[setup[0].channel, setup[1].channel]}
+      color={color}
+      playing={status.playing}
+      playStop={
+        <PlayStopButton
+          playing={status.playing}
+          starting={starting}
+          stopping={stopping}
+          disabled={!canPlay}
+          onPlay={() => void play()}
+          onStop={stop}
+        />
+      }
+      meterBar={<LevelMeter color={color} />}
+      aiDj={<AiDjSwitch on={status.auto} disabled={!status.playing || stopping} color={color} />}
+      drop={<DropButton status={status} live={live} color={color} />}
+      fx={<FxPad enabled={live && !!status.now} color={color} />}
+    />
+  );
+
+  // Notes from the auto-DJ (and the library link), in a fixed-height strip so the booth never jumps.
+  const notes = (
+    <div className="h-5 truncate text-center text-sm leading-5" aria-live="polite">
+      {status.error && <span className="text-bad">{status.error} </span>}
+      {status.note && <span className="text-warn">{status.note} </span>}
       {!canPlay && hydrated && (
-        <p className="text-center text-muted">
+        <span className="text-muted">
           {folderState === "none" && ready === 0 ? "No music folder connected. " : `Only ${ready} analysed track${ready === 1 ? "" : "s"}. `}
           <Link href="/library" className="text-accent underline">
             Open the library
           </Link>
-        </p>
+        </span>
       )}
-      {status.error && <p className="text-center text-bad">{status.error}</p>}
-      {status.note && <p className="text-center text-warn">{status.note}</p>}
-      <NextMix status={status} color={color} />
-      <Queue status={status} enabled={canPlay} onAdd={() => setPicker({ next: false })} />
-    </section>
+    </div>
   );
 
   return (
-    <main className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col gap-8 px-6 py-8" style={{ "--mood": color } as CSSProperties}>
+    // One gap (1 rem) between every block: mood, track view, decks.
+    <main className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col gap-4 px-6 py-8" style={{ "--mood": color } as CSSProperties}>
       <BeatPulse deck={status.now?.deck ?? null} track={status.now?.track ?? null} color={color} />
-      {picker && <TrackPicker next={picker.next} loadDeck={picker.loadDeck} layer={picker.layer} color={color} onClose={closePicker} />}
+      {picker && <TrackPicker next={picker.next} loadDeck={picker.loadDeck} color={color} onClose={closePicker} />}
 
       {resumeAvailable && !status.playing && canPlay && (
         <div className="flex items-center justify-between rounded-xl border border-warn/40 bg-warn/10 px-5 py-4">
           <p>The last set was interrupted. Press play to resume in {mood.name}.</p>
+        </div>
+      )}
+
+      {/* Floats over the page (fixed), so the booth doesn't move when it appears. */}
+      {status.silent && status.paused !== null && status.holding === null && (
+        <div
+          role="status"
+          className="fixed inset-x-4 top-20 z-40 mx-auto flex max-w-5xl flex-wrap items-center justify-center gap-x-4 gap-y-1 rounded-2xl border-2 border-warn bg-[#1f1708]/95 px-5 py-4 text-center shadow-2xl backdrop-blur"
+        >
+          <p className="text-2xl font-bold text-warn">Paused</p>
+          <p className="text-lg">
+            The club hears nothing.{" "}
+            {status.pausedAlong !== null ? (
+              <>
+                Press <strong>▶ Play</strong> on Deck {"ABCD"[status.paused]} or Deck {"ABCD"[status.pausedAlong]}.
+              </>
+            ) : (
+              <>
+                Press <strong>▶ Play</strong> on Deck {"ABCD"[status.paused]}, or on the cued deck.
+              </>
+            )}
+          </p>
         </div>
       )}
 
@@ -201,18 +276,15 @@ export function Booth() {
         </div>
       </section>
 
-      {deckCount === 2 ? (
-        <div className="grid items-start gap-6 lg:grid-cols-[1fr_minmax(15rem,18rem)_1fr]">
-          {decks[0]}
-          <div className="order-first lg:order-none">{centre}</div>
-          {decks[1]}
-        </div>
-      ) : (
-        <>
-          {centre}
-          <div className={`grid gap-6 sm:grid-cols-2 ${deckCount === 3 ? "lg:grid-cols-3" : "lg:grid-cols-4"}`}>{decks}</div>
-        </>
-      )}
+      <TrackStack rows={stackRows} color={color} notes={notes} />
+
+      {/* The controller, laid out like a DDJ-FLX4: Deck A · mixer · Deck B (decks C and D below). */}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem_minmax(0,1fr)]">
+        {deckPanel(0)}
+        {mixer}
+        {deckPanel(1)}
+      </div>
+      {deckCount > 2 && <div className="grid items-start gap-4 lg:grid-cols-2">{setup.slice(2).map((_, k) => deckPanel(k + 2))}</div>}
 
       <footer className="mt-auto text-center text-xs text-muted">
         {ready} tracks ready
@@ -275,7 +347,7 @@ function PlayStopButton({
   const label = starting ? "Starting…" : stopping ? "Stopping…" : playing ? "Stop" : "Play";
   const tint = stopping ? "#9a9aae" : stopLook ? "#f87171" : "#34d399";
   return (
-    <div className="relative h-44 w-44">
+    <div className="relative h-28 w-28 shrink-0">
       {busy && (
         <svg viewBox="0 0 100 100" className={`absolute inset-0 -rotate-90 ${starting ? "animate-spin" : ""}`} aria-hidden>
           <circle cx="50" cy="50" r="48" fill="none" stroke="var(--surface-2)" strokeWidth="3" />
@@ -298,7 +370,7 @@ function PlayStopButton({
         disabled={disabled || busy}
         aria-busy={busy}
         onClick={() => (playing ? onStop() : onPlay())}
-        className={`absolute inset-2 flex flex-col items-center justify-center gap-1 rounded-full text-2xl font-bold text-black transition disabled:cursor-not-allowed ${
+        className={`absolute inset-1.5 flex flex-col items-center justify-center gap-0.5 rounded-full text-lg font-bold text-black transition disabled:cursor-not-allowed ${
           busy ? "" : "disabled:opacity-40"
         }`}
         style={{
@@ -306,10 +378,10 @@ function PlayStopButton({
           boxShadow: busy ? "none" : `0 0 48px color-mix(in srgb, ${tint} 35%, transparent)`,
         }}
       >
-        <svg viewBox="0 0 24 24" className="h-8 w-8" aria-hidden>
+        <svg viewBox="0 0 24 24" className="h-6 w-6" aria-hidden>
           {stopLook || stopping ? <rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" /> : <path d="M7 4.5v15l13-7.5z" fill="currentColor" />}
         </svg>
-        <span className={busy ? "text-lg" : ""}>{label}</span>
+        <span className={busy ? "text-sm" : ""}>{label}</span>
       </button>
     </div>
   );
@@ -348,7 +420,7 @@ function DropButton({ status, live, color }: { status: AutoDJStatus; live: boole
       onClick={drop}
       disabled={disabled}
       title="Bring the next track in on its drop"
-      className="h-16 w-56 rounded-full border-2 text-xl font-bold uppercase tracking-[0.2em] transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-35"
+      className="h-14 w-full rounded-full border-2 text-lg font-bold uppercase tracking-[0.2em] transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-35"
       style={{
         borderColor: color,
         color: dropping ? "#07070b" : color,
@@ -361,164 +433,41 @@ function DropButton({ status, live, color }: { status: AutoDJStatus; live: boole
   );
 }
 
+
 /**
- * Layer: play the cued song over the current one (its bass off) until Drop
- * swaps them. If the cued song doesn't match in tempo and key, pick one that
- * does. Disabled while a mix or a dialogue is under way, or already layered.
+ * AI DJ mode. On: the auto-DJ mixes songs nobody has touched (once staff play,
+ * pause or cue a song, that one plays to its end). Off: it still cues the best
+ * next song but never mixes — each song plays to its end and the next starts.
  */
-function LayerButton({ status, live, color, onPick }: { status: AutoDJStatus; live: boolean; color: string; onPick: () => void }) {
-  const layer = useSession((s) => s.layer);
-  const [busy, setBusy] = useState(false);
-  useBoothFrame((snap) => {
-    const mix = snap?.mix;
-    const nowBusy = (!!mix && snap.now >= mix.start - SCHEDULE_MARGIN) || !!snap?.dropLocked;
-    if (nowBusy !== busy) setBusy(nowBusy);
-  });
-  const layered = status.next?.transition === "layer";
+function AiDjSwitch({ on, disabled, color }: { on: boolean; disabled: boolean; color: string }) {
+  const setAuto = useSession((s) => s.setAuto);
   return (
-    <button
-      type="button"
-      onClick={() => (status.next?.layerable ? layer() : onPick())}
-      disabled={!live || !status.now || busy || layered}
-      title="Play the next song over this one (its bass off) until Drop swaps them"
-      className="h-11 w-56 rounded-full border text-sm font-bold uppercase tracking-[0.2em] transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-35"
-      style={{ borderColor: color, color }}
-    >
-      {layered ? "Layered" : status.next?.layerable ? "Layer next song" : "Layer…"}
-    </button>
-  );
-}
-
-/** Bar, phrase and beat of the live deck. */
-function BeatCounter({ deck, track, color }: { deck: number; track: Track; color: string }) {
-  const bar = useRef<HTMLSpanElement>(null);
-  const phrase = useRef<HTMLSpanElement>(null);
-  const dots = useRef<(HTMLSpanElement | null)[]>([]);
-  useBoothFrame((snap) => {
-    const view = snap?.decks[deck];
-    const a = track.analysis;
-    if (!view || !a) return;
-    const g = gridPosition(a, view.position);
-    setText(bar.current, g.bar >= 0 ? String(g.bar + 1) : "—");
-    setText(phrase.current, g.bar >= 0 ? `${Math.floor(g.bar / PHRASE_BARS) + 1}.${(g.bar % PHRASE_BARS) + 1}` : "—");
-    dots.current.forEach((el, i) => {
-      if (el) el.style.opacity = g.bar >= 0 && g.beat === i ? "1" : "0.15";
-    });
-  });
-  return (
-    <div className="flex items-center gap-5 font-mono" aria-hidden>
-      <div className="text-center">
-        <span ref={bar} className="block text-2xl font-bold tabular-nums">
-          —
+    <div className="flex w-full flex-col items-center gap-1">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label="AI DJ"
+        disabled={disabled}
+        onClick={() => setAuto(!on)}
+        className="flex h-11 w-full items-center justify-between rounded-xl border px-3 text-sm font-bold transition disabled:opacity-40"
+        style={on ? { borderColor: color, background: `color-mix(in srgb, ${color} 20%, var(--surface))` } : { borderColor: "var(--warn)", background: "color-mix(in srgb, var(--warn) 12%, var(--surface))" }}
+      >
+        <span>AI DJ</span>
+        <span
+          className="relative h-6 w-11 rounded-full transition"
+          style={{ background: on ? color : "var(--surface-2)" }}
+          aria-hidden
+        >
+          <span className="absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all" style={{ left: on ? "1.375rem" : "0.125rem" }} />
         </span>
-        <span className="text-[10px] uppercase tracking-wider text-muted">Bar</span>
-      </div>
-      <div className="flex gap-1.5">
-        {[0, 1, 2, 3].map((i) => (
-          <span
-            key={i}
-            ref={(el) => {
-              dots.current[i] = el;
-            }}
-            className="h-3 w-3 rounded-full"
-            style={{ background: i === 0 ? color : "var(--foreground)", opacity: 0.15 }}
-          />
-        ))}
-      </div>
-      <div className="text-center">
-        <span ref={phrase} className="block text-2xl font-bold tabular-nums">
-          —
+        <span className="w-8 text-right text-sm" style={{ color: on ? color : "var(--warn)" }}>
+          {on ? "ON" : "OFF"}
         </span>
-        <span className="text-[10px] uppercase tracking-wider text-muted">Phrase</span>
-      </div>
-    </div>
-  );
-}
-
-/** Up-next card: countdown to the mix, then a progress bar while it runs. */
-function NextMix({ status, color }: { status: AutoDJStatus; color: string }) {
-  const when = useRef<HTMLSpanElement>(null);
-  const progress = useRef<HTMLDivElement>(null);
-  useBoothFrame((snap) => {
-    const mix = snap?.mix;
-    if (!mix) return;
-    if (snap.layering) {
-      setText(when.current, "layered · Drop to swap");
-      if (progress.current) progress.current.style.transform = "scaleX(0)";
-    } else if (snap.now < mix.start) {
-      // Desi Night: the song waits for Drop and only mixes by itself near its end.
-      const left = formatTime(mix.start - snap.now);
-      setText(when.current, status.next?.holding ? `waits for Drop · auto in ${left}` : `in ${left}`);
-      if (progress.current) progress.current.style.transform = "scaleX(0)";
-    } else {
-      // A layer's swap: progress from the swap, not from when the layer began.
-      const from = status.next?.transition === "layer" && mix.drop !== undefined ? mix.drop : mix.start;
-      const p = Math.min(1, Math.max(0, (snap.now - from) / Math.max(0.1, mix.end - from)));
-      setText(when.current, `mixing · ${Math.round(p * 100)}%`);
-      if (progress.current) progress.current.style.transform = `scaleX(${p})`;
-    }
-  });
-  if (!status.playing) return null;
-  return (
-    <div className="w-full rounded-2xl border border-border bg-surface/80 p-4 backdrop-blur">
-      <h3 className="text-xs font-medium uppercase tracking-wider text-muted">Up next</h3>
-      {status.next ? (
-        <>
-          <p className="mt-1 truncate font-semibold">
-            {status.next.track.title}
-            {status.next.requested && (
-              <span className="ml-2 rounded px-1.5 py-0.5 align-middle text-[10px] font-bold uppercase" style={{ background: color, color: "#07070b" }}>
-                Requested
-              </span>
-            )}
-          </p>
-          <p className="truncate text-sm text-muted">{status.next.track.artist || "Unknown artist"}</p>
-          <p className="mt-2 flex justify-between gap-2 font-mono text-xs text-muted">
-            <span>{TRANSITION_LABEL[status.next.transition]}</span>
-            <span ref={when} className="tabular-nums" />
-          </p>
-          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-2">
-            <div ref={progress} className="h-full origin-left rounded-full" style={{ background: color, transform: "scaleX(0)" }} />
-          </div>
-        </>
-      ) : (
-        <p className="mt-1 text-muted">Choosing…</p>
-      )}
-    </div>
-  );
-}
-
-/** Staff-requested tracks waiting after the next one. */
-function Queue({ status, enabled, onAdd }: { status: AutoDJStatus; enabled: boolean; onAdd: () => void }) {
-  const unrequest = useSession((s) => s.unrequest);
-  return (
-    <div className="w-full rounded-2xl border border-border bg-surface/80 p-4 backdrop-blur">
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-medium uppercase tracking-wider text-muted">Queue {status.queue.length > 0 && `· ${status.queue.length}`}</h3>
-        <button type="button" onClick={onAdd} disabled={!enabled} className="btn">
-          Add track
-        </button>
-      </div>
-      {status.queue.length === 0 ? (
-        <p className="mt-2 text-sm text-muted">Empty — the auto-DJ picks for the mood.</p>
-      ) : (
-        <ol className="mt-2 space-y-1">
-          {status.queue.map((t, i) => (
-            <li key={t.id} className="flex items-center gap-2 text-sm">
-              <span className="w-4 font-mono text-muted">{i + 1}</span>
-              <span className="min-w-0 flex-1 truncate">{t.title}</span>
-              <button
-                type="button"
-                onClick={() => unrequest(t.id)}
-                aria-label={`Remove ${t.title} from the queue`}
-                className="rounded-lg px-2 py-1 text-muted hover:bg-surface-2 hover:text-foreground"
-              >
-                ✕
-              </button>
-            </li>
-          ))}
-        </ol>
-      )}
+      </button>
+      <p className="min-h-[2rem] text-center text-xs text-warn" style={{ visibility: on ? "hidden" : "visible" }} aria-hidden={on}>
+        No automatic mixing: each song plays to its end, then the next one starts. Mix with Drop or ▶.
+      </p>
     </div>
   );
 }
@@ -531,7 +480,7 @@ function LevelMeter({ color }: { color: string }) {
     if (bar.current) bar.current.style.transform = `scaleX(${Math.min(1, level() * 4)})`;
   });
   return (
-    <div className="h-2 w-56 overflow-hidden rounded-full bg-surface-2" aria-hidden>
+    <div className="h-2 w-full overflow-hidden rounded-full bg-[#050506]" aria-hidden title="Master level">
       <div
         ref={bar}
         className="h-full origin-left"

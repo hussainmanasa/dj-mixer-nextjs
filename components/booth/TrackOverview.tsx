@@ -18,6 +18,7 @@ export function TrackOverview({
   color,
   live,
   startAt,
+  hotCues,
   onPickBar,
 }: {
   deck: number;
@@ -25,6 +26,8 @@ export function TrackOverview({
   color: string;
   live: boolean;
   startAt?: number;
+  /** Cue pads A–H: shown as small letters at their spots. */
+  hotCues?: (number | null)[];
   onPickBar?: (bar: number) => void;
 }) {
   const a = track?.analysis ?? null;
@@ -105,6 +108,19 @@ export function TrackOverview({
           <span className="absolute -top-0.5 left-1 rounded-sm bg-black/70 px-0.5 text-[10px] leading-none text-white">⚑</span>
         </div>
       )}
+      {a &&
+        hotCues?.map((at, i) =>
+          at === null ? null : (
+            <span
+              key={i}
+              className="absolute bottom-0 -translate-x-1/2 rounded-t-sm bg-white/85 px-0.5 text-[9px] font-bold leading-tight text-black"
+              style={{ left: `${(at / a.duration) * 100}%` }}
+              aria-hidden
+            >
+              {"ABCDEFGH"[i]}
+            </span>
+          ),
+        )}
       <div ref={playhead} className="absolute inset-y-0 w-0.5 -translate-x-1/2 bg-white shadow-[0_0_6px_white]" style={{ left: 0 }} />
     </div>
   );

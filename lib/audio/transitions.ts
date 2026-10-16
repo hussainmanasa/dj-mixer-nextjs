@@ -220,13 +220,17 @@ export function layerIn(out: Deck, inc: Deck, t: number, outBeatSec: number): Tr
  * under a rising high-pass, like a drop swap's fade. `start` is when the
  * layer began.
  */
-export function layerSwap(out: Deck, inc: Deck, start: number, t: number, outBeatSec: number): TransitionPlan {
-  out.low.gain.setValueAtTime(0, t - outBeatSec);
+export function layerSwap(out: Deck, inc: Deck, start: number, t: number, outBeatSec: number, incFull = false): TransitionPlan {
+  // `incFull`: the layered song already plays at full (it carried on alone while the other was paused) — only
+  // the old song's bass goes and it fades.
+  out.low.gain.cancelAndHoldAtTime(t - outBeatSec);
   out.low.gain.linearRampToValueAtTime(EQ_KILL_DB, t);
-  inc.low.gain.setValueAtTime(EQ_KILL_DB, t - outBeatSec);
-  inc.low.gain.linearRampToValueAtTime(0, t);
-  inc.fader.gain.setValueAtTime(LAYER_LEVEL, t);
-  inc.fader.gain.linearRampToValueAtTime(1, t + 0.05);
+  if (!incFull) {
+    inc.low.gain.setValueAtTime(EQ_KILL_DB, t - outBeatSec);
+    inc.low.gain.linearRampToValueAtTime(0, t);
+    inc.fader.gain.setValueAtTime(LAYER_LEVEL, t);
+    inc.fader.gain.linearRampToValueAtTime(1, t + 0.05);
+  }
   const end = t + 8 * outBeatSec;
   // Switch the filter type now at an inaudible cut-off; the sweep is scheduled.
   out.filter.type = "highpass";

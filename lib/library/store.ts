@@ -3,6 +3,7 @@
 // and the last session. Client-only.
 
 import { createStore, del, get, set, update } from "idb-keyval";
+import type { Waveform } from "@/lib/analysis/waveform";
 import type { MoodOverrides } from "@/lib/dj/moods";
 import type { MoodId, SetLogEntry, Track } from "@/lib/types";
 import { MAX_LOG_ENTRIES } from "./setlog";
@@ -23,6 +24,14 @@ export interface Settings {
   keyLock: boolean;
   /** Admin edits to the mood presets. */
   moods: MoodOverrides;
+  /** Output for the mix: the club speakers (PA), e.g. Bluetooth or the 3.5 mm jack. "" = system default. */
+  mainOutput: string;
+  /** Output for previews and Cue (headphones), e.g. USB-C or HDMI. null = not chosen (previews use the default). */
+  previewOutput: string | null;
+  /** Master volume on the club speakers, 0..1 (the booth's volume slider). */
+  volume: number;
+  /** Volume of previews and Cue on the preview output (headphones), 0..1. */
+  previewVolume: number;
 }
 
 export interface LastSession {
@@ -33,7 +42,7 @@ export interface LastSession {
   updatedAt: number;
 }
 
-export const DEFAULT_SETTINGS: Settings = { deckCount: 2, keyLock: false, moods: {} };
+export const DEFAULT_SETTINGS: Settings = { deckCount: 2, keyLock: false, moods: {}, mainOutput: "", previewOutput: null, volume: 1, previewVolume: 1 };
 
 export async function loadFolderHandle(): Promise<FileSystemDirectoryHandle | undefined> {
   return db ? get<FileSystemDirectoryHandle>(KEYS.folder, db) : undefined;
@@ -53,6 +62,33 @@ export async function loadTracks(): Promise<Record<string, Track>> {
 
 export async function saveTracks(tracks: Record<string, Track>): Promise<void> {
   if (db) await set(KEYS.tracks, tracks, db);
+}
+
+/** The settings file in the music folder: when this computer last read or wrote it (its `savedAt`). */
+export async function loadSettingsSync(): Promise<number> {
+  return (db ? await get<number>("settingsFile:syncedAt", db) : undefined) ?? 0;
+}
+
+export async function saveSettingsSync(savedAt: number): Promise<void> {
+  if (db) await set("settingsFile:syncedAt", savedAt, db);
+}
+
+/** A song's detailed waveform for the booth's track view (see lib/analysis/waveform.ts). */
+export async function loadWave(trackId: string): Promise<Waveform | undefined> {
+  return db ? get<Waveform>(`wave:${trackId}`, db) : undefined;
+}
+
+export async function saveWave(trackId: string, wave: Waveform): Promise<void> {
+  if (db) await set(`wave:${trackId}`, wave, db);
+}
+
+/** A song's cover art thumbnail; `false` once it's known to have none. */
+export async function loadArt(trackId: string): Promise<Blob | false | undefined> {
+  return db ? get<Blob | false>(`art:${trackId}`, db) : undefined;
+}
+
+export async function saveArt(trackId: string, art: Blob | false): Promise<void> {
+  if (db) await set(`art:${trackId}`, art, db);
 }
 
 export async function loadSettings(): Promise<Settings> {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TrackAnalysis } from "@/lib/types";
-import { dropBuildBars, dropCue, gridPosition, mixOutPoint, nextBoundary, type MixOutRule } from "./mixpoints";
+import { dropBuildBars, dropCue, gridPosition, mixOutFor, mixOutPoint, nextBoundary, type MixOutRule } from "./mixpoints";
 
 function bars(...runs: [number, number][]): number[] {
   return runs.flatMap(([n, level]) => Array<number>(n).fill(level));
@@ -115,5 +115,21 @@ describe("dropBuildBars", () => {
     // Its drop is 5 s in at rate 1 → only 2 whole bars of build.
     expect(dropBuildBars(30, 2, 5, 1, 8)).toBe(2);
     expect(dropBuildBars(30, 2, 0, 1, 8)).toBe(0);
+  });
+});
+
+describe("mixOutFor (cue out)", () => {
+  it("starts the transition so its hand-over lands on the cue out", () => {
+    // A 16-bar blend hands over halfway (8 bars in): cue out at bar 100 → start at bar 92.
+    const cueOut = 0.5 + 100 * BAR;
+    expect(barOf(mixOutFor(clubTrack, cueOut, 16, 0, oneDrop))).toBe(92);
+    // An echo-out or cut hands over at once.
+    expect(barOf(mixOutFor(clubTrack, cueOut, 8, 0, oneDrop, 0))).toBe(100);
+  });
+
+  it("falls back to the song's own mix-out point without a cue out, or once it has passed", () => {
+    expect(mixOutFor(clubTrack, undefined, 16, 0, oneDrop)).toBe(mixOutPoint(clubTrack, 16, 0, oneDrop));
+    const cueOut = 0.5 + 20 * BAR;
+    expect(mixOutFor(clubTrack, cueOut, 16, 0.5 + 30 * BAR, oneDrop)).toBe(mixOutPoint(clubTrack, 16, 0.5 + 30 * BAR, oneDrop));
   });
 });

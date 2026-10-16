@@ -1,0 +1,38 @@
+import { expect, test, type Page } from "@playwright/test";
+import { deckStates, loadLibrary, startBooth } from "./helpers";
+
+const deck = (page: Page, letter: string) => page.getByRole("region", { name: `Deck ${letter}` });
+const states = async (page: Page) => (await deckStates(page)).join(" ");
+
+test("⏏ during the set: the cued deck empties and stays empty until LOAD; a playing song can't be ejected", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await loadLibrary(page);
+  await startBooth(page, "Groove");
+  await expect.poll(() => states(page), { timeout: 30_000 }).toMatch(/A:On air.*B:Cued/);
+
+  // The song on air can't be ejected.
+  await expect(deck(page, "A").getByRole("button", { name: "Eject Deck A" })).toBeDisabled();
+
+  // Eject the cued song: Deck B is empty, the auto-DJ doesn't refill it, the music plays on.
+  await deck(page, "B").getByRole("button", { name: "Eject Deck B" }).click();
+  await expect.poll(() => states(page)).toMatch(/A:On air.*B:Empty/);
+  await expect(page.getByText("Deck B is empty — LOAD a song")).toBeVisible();
+  await page.waitForTimeout(4000);
+  expect(await states(page)).toMatch(/A:On air.*B:Empty/);
+
+  // LOAD fills it with the song staff choose.
+  await page.getByRole("button", { name: "Choose track, Deck B" }).click();
+  await page.getByRole("dialog").getByRole("listitem").filter({ hasText: "Test Groove D" }).getByRole("button").last().click();
+  await expect.poll(() => states(page), { timeout: 15_000 }).toMatch(/A:On air.*B:Cued .*Test Groove D/);
+
+  // Playing along it can't be ejected; paused, it can.
+  await deck(page, "B").getByRole("button", { name: "Play Deck B" }).click();
+  await expect.poll(() => states(page), { timeout: 3000 }).toMatch(/B:Playing along/);
+  await expect(deck(page, "B").getByRole("button", { name: "Eject Deck B" })).toBeDisabled();
+  await deck(page, "B").getByRole("button", { name: "Pause Deck B" }).click();
+  await expect.poll(() => states(page)).toMatch(/B:Paused/);
+  await deck(page, "B").getByRole("button", { name: "Eject Deck B" }).click();
+  await expect.poll(() => states(page)).toMatch(/A:On air.*B:Empty/);
+  expect(errors).toEqual([]);
+});

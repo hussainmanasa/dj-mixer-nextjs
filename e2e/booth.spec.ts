@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { deckStates, dropButton, loadLibrary, startBooth } from "./helpers";
+import { deckStates, dropButton, loadLibrary, startBooth, upNext } from "./helpers";
 
 function collectErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -14,8 +14,9 @@ test("with key lock on, a Drop builds up and lands without errors or dead air", 
   await page.getByLabel("Keep tracks in their original key while matching tempo").check();
   await startBooth(page);
   // Each deck says key-lock is running.
-  await expect(page.getByRole("region", { name: "Deck A" })).toContainText("Key lock");
-  await expect(page.getByRole("region", { name: "Deck B" })).toContainText("Key lock");
+  // (The badge always keeps its place; it shows only while key-lock runs.)
+  await expect(page.getByRole("region", { name: "Deck A" }).getByText("Key lock", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Deck B" }).getByText("Key lock", { exact: true })).toBeVisible();
   await page.waitForTimeout(6000);
   await dropButton(page).click();
   await expect(dropButton(page)).toHaveText(/Drop in \d:\d\d/);
@@ -35,9 +36,9 @@ test("Peak Hour swaps onto the next track's drop on its own", async ({ page }) =
   await loadLibrary(page);
   await startBooth(page, "Peak Hour");
   // Key-lock is off by default: no badge.
-  await expect(page.getByRole("region", { name: "Deck A" })).not.toContainText("Key lock");
+  await expect(page.getByRole("region", { name: "Deck A" }).getByText("Key lock", { exact: true })).toBeHidden();
   // The planned transition is a drop swap, not a blend.
-  await expect(page.getByText("Up next").locator("..")).toContainText("Drop");
+  await expect(upNext(page)).toContainText("Drop");
   // It lands where the current track breaks down after its first drop (~bar 40, ~75 s in) and hands over.
   await expect.poll(async () => (await deckStates(page)).join(" "), { timeout: 120_000, intervals: [1000] }).toMatch(/Mixing in/);
   await expect.poll(async () => (await deckStates(page)).join(" "), { timeout: 60_000, intervals: [1000] }).not.toMatch(/Mixing/);

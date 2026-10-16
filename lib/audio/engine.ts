@@ -1,11 +1,16 @@
-// The audio graph: N decks (2–4) → master bus → effects → limiter → speakers, with
-// analysers on the master for level metering and silence detection.
+// The audio graph: N decks (2–4) and the jog-wheel scratch → master bus → effects →
+// limiter → analysers (level meter, silence watchdog) → master volume → speakers.
+// The analysers sit before the volume, so turning it down is never mistaken for silence.
 // Client-only. Create it from a user gesture (browsers block audio otherwise).
 
 import { MAX_DECKS, MIN_DECKS } from "@/lib/types";
 import { Deck } from "./deck";
 import { MasterFx } from "./fx";
 import { createKeyLock, KEYLOCK_DELAY_SAMPLES, loadKeyLock } from "./keylock";
+import { channelGainOf, crossfaderGains, NEUTRAL_CHANNEL, type MixerChannel } from "./mixer";
+import { listOutputs, routeTo } from "./outputs";
+import { Scratch } from "./scratch";
+import { volumeGain } from "./volume";
 
 export class AudioEngine {
   readonly ctx: AudioContext;
@@ -16,7 +21,17 @@ export class AudioEngine {
   readonly analyser: AnalyserNode;
   /** Long window (~0.7 s) so the silence watchdog never falls between beats. */
   readonly watchAnalyser: AnalyserNode;
+  /** The booth's master volume, last before the speakers. */
+  readonly volume: GainNode;
+  /** The jog wheel's scratch, into the master like a deck. */
+  readonly scratch: Scratch;
+  /** 2–4 decks; the count can change while playing (`addDecks` / `removeFreeDecks`). */
   readonly decks: Deck[];
+  /** Key-lock is on for every deck. */
+  private keyLockOn = false;
+  /** The staff mixer: each channel's knobs and fader (by deck index), and the crossfader (decks A and B). */
+  private readonly channels: MixerChannel[] = Array.from({ length: MAX_DECKS }, () => ({ ...NEUTRAL_CHANNEL }));
+  private crossfader = 0.5;
   private readonly levelBuf: Float32Array<ArrayBuffer>;
   private readonly watchBuf: Float32Array<ArrayBuffer>;
 
@@ -37,8 +52,10 @@ export class AudioEngine {
     // Analysers pass audio through unchanged; chaining them keeps both processed.
     this.fx = new MasterFx(this.ctx, this.limiter);
     this.master.connect(this.fx.input);
-    this.limiter.connect(this.analyser).connect(this.watchAnalyser).connect(this.ctx.destination);
+    this.volume = new GainNode(this.ctx, { gain: 1 });
+    this.limiter.connect(this.analyser).connect(this.watchAnalyser).connect(this.volume).connect(this.ctx.destination);
     this.decks = Array.from({ length: n }, (_, i) => new Deck(this.ctx, this.master, i));
+    this.scratch = new Scratch(this.ctx, this.master);
     this.levelBuf = new Float32Array(this.analyser.fftSize);
     this.watchBuf = new Float32Array(this.watchAnalyser.fftSize);
   }
@@ -50,12 +67,114 @@ export class AudioEngine {
    */
   outputDelay = 0;
 
-  /** Turn key-lock on or off for every deck (only while stopped). Resolves to the state actually in effect. */
-  async setKeyLock(on: boolean): Promise<boolean> {
+  /**
+   * Turn key-lock on or off for every deck. With `fade` (mid-set) each deck
+   * crossfades to its new route over that many seconds. Resolves to the state
+   * actually in effect.
+   */
+  async setKeyLock(on: boolean, fade = 0): Promise<boolean> {
     const ok = on && (await loadKeyLock(this.ctx));
-    for (const d of this.decks) d.setKeyLock(ok ? createKeyLock(this.ctx) : null);
+    if (ok === this.keyLockOn) return ok;
+    this.keyLockOn = ok;
+    for (const d of this.decks) d.setKeyLock(ok ? createKeyLock(this.ctx) : null, fade);
     this.outputDelay = ok ? KEYLOCK_DELAY_SAMPLES / this.ctx.sampleRate : 0;
     return ok;
+  }
+
+  /** Which side of the crossfader a deck is on: A left, B right; C and D aren't on it. */
+  private side(index: number): 0 | 1 | null {
+    return index === 0 ? 0 : index === 1 ? 1 : null;
+  }
+
+  private sideGain(index: number): number {
+    const side = this.side(index);
+    return side === null ? 1 : crossfaderGains(this.crossfader)[side];
+  }
+
+  /** Staff moved a channel's knobs or fader. */
+  setMixer(index: number, ch: MixerChannel): void {
+    if (index < 0 || index >= MAX_DECKS) return;
+    this.channels[index] = { ...ch };
+    this.decks[index]?.setMixer(this.channels[index], this.sideGain(index));
+  }
+
+  /** Staff moved the crossfader (0 = Deck A only … 0.5 = both … 1 = Deck B only). */
+  setCrossfader(x: number): void {
+    this.crossfader = Math.max(0, Math.min(1, x));
+    for (const d of this.decks.slice(0, 2)) d.setMixer(this.channels[d.index], this.sideGain(d.index));
+  }
+
+  /** The gain staff's fader and crossfader leave a deck at (near 0: they turned it down on purpose). */
+  channelGain(index: number): number {
+    return channelGainOf(this.channels[index] ?? NEUTRAL_CHANNEL, this.crossfader, this.side(index));
+  }
+
+  /** Add decks up to `count` (also while playing). Returns the new ones. */
+  addDecks(count: number): Deck[] {
+    const added: Deck[] = [];
+    while (this.decks.length < Math.min(MAX_DECKS, count)) {
+      const d = new Deck(this.ctx, this.master, this.decks.length);
+      if (this.keyLockOn) d.setKeyLock(createKeyLock(this.ctx));
+      d.setMixer(this.channels[d.index], this.sideGain(d.index), 0);
+      this.decks.push(d);
+      added.push(d);
+    }
+    return added;
+  }
+
+  /** Remove decks from the end down to `count`, stopping at one that's in use. True once there are `count`. */
+  removeFreeDecks(count: number, inUse: (Deck | null | undefined)[]): boolean {
+    const n = Math.max(MIN_DECKS, count);
+    while (this.decks.length > n) {
+      const last = this.decks[this.decks.length - 1];
+      if (last.isPlaying || inUse.includes(last)) break;
+      last.dispose();
+      this.decks.pop();
+    }
+    return this.decks.length <= n;
+  }
+
+  /** The chosen output for the mix ("" = system default) and whether it is actually in use. */
+  private output = { wanted: "", missing: false };
+  /** Called when the chosen output disappears or comes back. */
+  onOutputChange: ((missing: boolean) => void) | null = null;
+
+  /**
+   * Send the mix to an output device (the club speakers); can change mid-set.
+   * If that device disappears (Bluetooth drops, cable pulled) the mix falls
+   * back to the default output, and returns when the device does.
+   */
+  async setOutput(deviceId: string): Promise<boolean> {
+    this.output.wanted = deviceId;
+    navigator.mediaDevices?.addEventListener?.("devicechange", this.checkOutput);
+    return this.checkOutput();
+  }
+
+  private checkOutput = async (): Promise<boolean> => {
+    const { wanted } = this.output;
+    const present = wanted === "" || (await listOutputs()).some((d) => d.id === wanted);
+    const ok = present && (await routeTo(this.ctx, wanted));
+    if (!ok) await routeTo(this.ctx, "");
+    if (this.output.missing !== !ok) {
+      this.output.missing = !ok;
+      this.onOutputChange?.(!ok);
+    }
+    return ok;
+  };
+
+  /**
+   * Seconds from scheduling a sound to the room hearing it: the key-lock delay
+   * plus the output device's own latency (large on Bluetooth). The booth's
+   * visuals use it so the jog wheels and beat pulse match what people hear.
+   */
+  get displayDelay(): number {
+    return this.outputDelay + (this.ctx.outputLatency || 0);
+  }
+
+  /** Master volume, 0..1 (see `volumeGain`); a short glide so a slider never clicks. */
+  setVolume(volume: number): void {
+    this.volume.gain.cancelScheduledValues(this.now);
+    this.volume.gain.setTargetAtTime(volumeGain(volume), this.now, 0.03);
   }
 
   get now(): number {
@@ -80,9 +199,9 @@ export class AudioEngine {
     return this.ctx.decodeAudioData(bytes);
   }
 
-  /** A deck that is not playing, excluding the given ones. */
-  freeDeck(exclude: Deck[] = []): Deck | null {
-    return this.decks.find((d) => !d.isPlaying && !exclude.includes(d)) ?? null;
+  /** A deck that is not playing, excluding the given ones (and any at index `limit` or above). */
+  freeDeck(exclude: Deck[] = [], limit = Infinity): Deck | null {
+    return this.decks.find((d) => d.index < limit && !d.isPlaying && !exclude.includes(d)) ?? null;
   }
 
   /** Master RMS level, 0..1. */
@@ -124,6 +243,7 @@ export class AudioEngine {
   }
 
   async close(): Promise<void> {
+    navigator.mediaDevices?.removeEventListener?.("devicechange", this.checkOutput);
     for (const d of this.decks) d.unload();
     await this.ctx.close();
   }

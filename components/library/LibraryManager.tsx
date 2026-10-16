@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { canPickFolders } from "@/lib/library/scan";
 import { MAX_DECKS, MIN_DECKS } from "@/lib/types";
 import { useLibrary } from "@/store/library";
+import { AudioOutputs } from "./AudioOutputs";
 import { TrackTable } from "./TrackTable";
 
 const DECK_HELP: Record<number, string> = {
@@ -95,6 +96,7 @@ export function LibraryManager() {
             )}
           </div>
           {s.error && <p className="mt-3 text-sm text-bad">{s.error}</p>}
+          {s.folder && s.folderState === "ready" && <SettingsFileNote />}
           {s.analysis && (
             <div className="mt-4">
               <p className="text-sm text-muted">
@@ -129,7 +131,7 @@ export function LibraryManager() {
             ))}
           </div>
           <p className="mt-3 text-sm text-muted">{DECK_HELP[s.settings.deckCount]}</p>
-          <p className="mt-1 text-xs text-muted">Takes effect the next time Play is pressed.</p>
+          <p className="mt-1 text-xs text-muted">Applies straight away, also during a set: a deck that&apos;s playing or cued is removed once it&apos;s free.</p>
 
           <h2 className="mt-6 text-sm font-medium uppercase tracking-wider text-muted">Key lock (beta)</h2>
           <label className="mt-3 flex cursor-pointer items-center gap-3">
@@ -145,11 +147,63 @@ export function LibraryManager() {
             Without it, a track sped up 5% also plays 5% higher. With it, the key stays put, at the cost of a slightly
             softer sound on big tempo changes. Listen on the venue system before using it on a busy night.
           </p>
-          <p className="mt-1 text-xs text-muted">Takes effect the next time Play is pressed.</p>
+          <p className="mt-1 text-xs text-muted">Switches straight away, also during a set (a very short smear as it switches).</p>
         </div>
       </section>
 
+      <AudioOutputs />
+
       <TrackTable />
     </main>
+  );
+}
+
+/** m/d hh:mm in the venue's locale. */
+function when(ms: number): string {
+  return new Date(ms).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * The settings file kept in the music folder: settings and every song's edits
+ * travel with the music to any computer, and are read back whenever the folder
+ * is opened or rescanned.
+ */
+function SettingsFileNote() {
+  const f = useLibrary((s) => s.settingsFile);
+  const enable = useLibrary((s) => s.enableSettingsFile);
+  return (
+    <div className="mt-4 rounded-xl border border-border bg-surface-2/60 p-3 text-sm" role="status" aria-label="Settings file">
+      {f.status === "saved" && (
+        <p>
+          Settings and song edits are saved in the music folder as <span className="font-mono">{f.name}</span>
+          {f.savedAt ? ` · ${when(f.savedAt)}` : ""} — open this folder on any computer to get them back.
+        </p>
+      )}
+      {f.status === "readonly" && (
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="flex-1">
+            {f.name ? (
+              <>
+                Read settings from <span className="font-mono">{f.name}</span> in the music folder. Allow the app to update it so your changes are
+                kept there too.
+              </>
+            ) : (
+              <>Save the app&apos;s settings and every song&apos;s edits in the music folder, so they go wherever the music goes.</>
+            )}
+          </p>
+          <button type="button" className="btn-primary" onClick={() => void enable()}>
+            Save settings in the music folder
+          </button>
+        </div>
+      )}
+      {f.status === "error" && <p className="text-bad">Couldn&apos;t use the settings file: {f.error}</p>}
+      {f.imported && (
+        <p className="mt-1 text-good">
+          Imported settings{f.imported.songs ? ` and edits for ${f.imported.songs} song${f.imported.songs === 1 ? "" : "s"}` : ""} from{" "}
+          <span className="font-mono">{f.name}</span>
+          {f.savedAt ? ` (saved ${when(f.savedAt)})` : ""}.
+        </p>
+      )}
+    </div>
   );
 }

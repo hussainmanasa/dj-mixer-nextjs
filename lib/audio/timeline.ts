@@ -17,7 +17,16 @@ export interface Jump {
   to: number;
 }
 
+/** A beat loop: once the playhead reaches `end` it wraps back to `start` (track seconds), like AudioBufferSourceNode.loop. */
+export interface Loop {
+  start: number;
+  end: number;
+}
+
 export class PlaybackTimeline {
+  /** A loop the source is playing (set while looping; `timeAt` ignores it — nothing is scheduled inside a loop). */
+  loop: Loop | null = null;
+
   constructor(
     /** Context time the source starts. */
     public readonly startTime: number,
@@ -40,8 +49,9 @@ export class PlaybackTimeline {
   positionAt(t: number): number {
     const j = this.jump;
     // After a jump the track continues from `to`, having played the same distance since.
-    if (j && t >= j.at) return j.to + this.continuous(t) - this.continuous(j.at);
-    return this.continuous(t);
+    const p = j && t >= j.at ? j.to + this.continuous(t) - this.continuous(j.at) : this.continuous(t);
+    const l = this.loop;
+    return l && p >= l.end && l.end > l.start ? l.start + ((p - l.start) % (l.end - l.start)) : p;
   }
 
   /** Context time at which the deck reaches track position `pos` (after the jump if it plays twice). */
@@ -86,4 +96,17 @@ export class PlaybackTimeline {
     }
     return r.t1 + (pos - p1) / r.r1;
   }
+}
+
+/**
+ * The same playback from context time `t` on, as a fresh timeline with no ramp:
+ * starts at the position and rate it has at `t` and keeps a jump still to come.
+ * A tempo change mid-song (staff's tempo slider) rebases before ramping, since a
+ * timeline holds only one ramp.
+ */
+export function rebaseTimeline(tl: PlaybackTimeline, t: number): PlaybackTimeline {
+  const jump = tl.jump && tl.jump.at > t ? tl.jump : null;
+  const next = new PlaybackTimeline(t, tl.positionAt(t), tl.rateAt(t), null, jump);
+  next.loop = tl.loop;
+  return next;
 }

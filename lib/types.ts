@@ -128,6 +128,10 @@ export interface Track {
   crates?: string[];
   /** Song markers set by the admin (dialogue, hook, default start). */
   cues?: TrackCues;
+  /** Hot cues A–H (track seconds, on a beat), set from the booth's cue pads; null = empty pad. */
+  hotCues?: (number | null)[];
+  /** Saved loops (track seconds, on the beat grid), made in the track editor; up to MAX_SAVED_LOOPS. */
+  savedLoops?: { start: number; end: number }[];
   status: TrackStatus;
   error?: string;
   addedAt: number;
@@ -143,8 +147,10 @@ export type TransitionKind = "blend" | "filterSweep" | "echoOut" | "cut" | "drop
 
 /** Song markers, in track seconds. Set by the admin in the track editor; they survive re-analysis. */
 export interface TrackCues {
-  /** Where the song starts when nothing else applies (on a downbeat). */
+  /** Cue in: where the song starts when nothing else applies (on a downbeat). */
   start?: number;
+  /** Cue out: where the auto-DJ hands over to the next song (on a downbeat) instead of its own mix-out point. */
+  end?: number;
   /** The hook / chorus (mukhda), on downbeats. */
   hookStart?: number;
   hookEnd?: number;
@@ -160,6 +166,7 @@ export type EntryChoice =
   | { kind: "dialogue" }
   | { kind: "hook" }
   | { kind: "drop" }
+  /** From a bar counted from the first downbeat; may be fractional in beats (10.25 = bar 11, beat 2). */
   | { kind: "bar"; bar: number };
 
 /** One track played, for the set log (licence reports). */
@@ -181,6 +188,11 @@ export interface SetLogEntry {
 }
 
 export const SUPPORTED_EXTENSIONS = [".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".oga", ".opus"] as const;
+
+/** Cue pads per deck (hot cues A–H). */
+export const HOT_CUES = 8;
+/** Saved loops per song. */
+export const MAX_SAVED_LOOPS = 4;
 
 export const MIN_DECKS = 2;
 export const MAX_DECKS = 4;

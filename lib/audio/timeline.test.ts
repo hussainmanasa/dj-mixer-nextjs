@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PlaybackTimeline } from "./timeline";
+import { PlaybackTimeline, rebaseTimeline } from "./timeline";
 
 describe("PlaybackTimeline", () => {
   it("maps time ↔ position at a constant rate", () => {
@@ -40,5 +40,71 @@ describe("PlaybackTimeline", () => {
     expect(tl.positionAt(20)).toBeCloseTo(60, 9);
     expect(tl.positionAt(40)).toBeCloseTo(60 + 20.4, 9);
     for (const t of [12, 20, 33, 40, 55]) expect(tl.timeAt(tl.positionAt(t))).toBeCloseTo(t, 6);
+  });
+});
+
+describe("rebaseTimeline", () => {
+  it("continues from the same position and rate, mid-ramp", () => {
+    const tl = new PlaybackTimeline(10, 5, 1.04, { t0: 20, t1: 30, r0: 1.04, r1: 1 });
+    const re = rebaseTimeline(tl, 25);
+    expect(re.positionAt(25)).toBeCloseTo(tl.positionAt(25), 9);
+    expect(re.rateAt(25)).toBeCloseTo(tl.rateAt(25), 9);
+    expect(re.ramp).toBeNull();
+  });
+
+  it("lets a new ramp start where the old one was cut off, positions staying continuous", () => {
+    const tl = new PlaybackTimeline(0, 0, 1, { t0: 10, t1: 20, r0: 1, r1: 1.05 });
+    const re = rebaseTimeline(tl, 15);
+    re.ramp = { t0: 15, t1: 15.15, r0: re.rateAt(15), r1: 0.97 };
+    expect(re.positionAt(15)).toBeCloseTo(tl.positionAt(15), 9);
+    expect(re.rateAt(16)).toBeCloseTo(0.97, 9);
+    // After the new ramp it plays on at the new rate.
+    expect(re.positionAt(26) - re.positionAt(16)).toBeCloseTo(9.7, 9);
+    expect(re.timeAt(re.positionAt(18))).toBeCloseTo(18, 6);
+  });
+
+  it("keeps a dialogue's jump that is still to come and drops one that has happened", () => {
+    const tl = new PlaybackTimeline(0, 0, 1, null, { at: 8, to: 60 });
+    const before = rebaseTimeline(tl, 5);
+    expect(before.jump).toEqual({ at: 8, to: 60 });
+    expect(before.positionAt(9)).toBeCloseTo(tl.positionAt(9), 9);
+    const after = rebaseTimeline(tl, 10);
+    expect(after.jump).toBeNull();
+    expect(after.positionAt(12)).toBeCloseTo(tl.positionAt(12), 9);
+  });
+});
+
+describe("loops", () => {
+  it("plays on to the loop's end, then wraps back to its start, round and round", () => {
+    const tl = new PlaybackTimeline(0, 10, 1);
+    tl.loop = { start: 10, end: 12 };
+    expect(tl.positionAt(1.5)).toBeCloseTo(11.5, 9);
+    expect(tl.positionAt(2.5)).toBeCloseTo(10.5, 9);
+    expect(tl.positionAt(7)).toBeCloseTo(11, 9);
+  });
+
+  it("follows the playback rate, and a rebase keeps the loop going", () => {
+    const tl = new PlaybackTimeline(0, 20, 2);
+    tl.loop = { start: 20, end: 21 };
+    expect(tl.positionAt(0.75)).toBeCloseTo(20.5, 9);
+    const re = rebaseTimeline(tl, 0.75);
+    expect(re.loop).toEqual({ start: 20, end: 21 });
+    expect(re.positionAt(1)).toBeCloseTo(tl.positionAt(1), 9);
+  });
+
+  it("a loop that starts behind the playhead wraps once the playhead reaches its end", () => {
+    const tl = new PlaybackTimeline(0, 30.4, 1);
+    tl.loop = { start: 30, end: 31 };
+    expect(tl.positionAt(0.5)).toBeCloseTo(30.9, 9);
+    expect(tl.positionAt(0.7)).toBeCloseTo(30.1, 9);
+  });
+
+  it("a jump back to a loop's start (the song was past it), then the loop: it loops from the jump on", () => {
+    // At 2 s (track 52) the deck jumps back to 40, then loops 40–42.
+    const tl = rebaseTimeline(new PlaybackTimeline(0, 50, 1, null, { at: 2, to: 40 }), 1);
+    tl.loop = { start: 40, end: 42 };
+    expect(tl.positionAt(2.5)).toBeCloseTo(40.5, 9);
+    expect(tl.positionAt(4.5)).toBeCloseTo(40.5, 9);
+    expect(tl.positionAt(5.9)).toBeCloseTo(41.9, 9);
   });
 });
