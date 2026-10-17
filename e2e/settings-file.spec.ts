@@ -95,8 +95,24 @@ test("settings travel with the music folder: imported on open, kept up to date, 
   expect(Object.values(saved.tracks).map((t) => (t as { path: string }).path)).toEqual(
     expect.arrayContaining(["Test Groove A 126.wav", "Test Groove B 128.wav", "Test Groove C 127.wav"]),
   );
+  // …and every song's analysis.
+  await expect.poll(async () => Object.keys(JSON.parse((await readFolderFile(page, "ai-dj-mixer-settings.json")) ?? "{}").analysis ?? {}).length, { timeout: 20_000 }).toBe(songs);
+  const withAnalysis = JSON.parse((await readFolderFile(page, "ai-dj-mixer-settings.json"))!);
+  for (const entry of Object.values(withAnalysis.analysis) as { analysis: { bpm: number; barLevels: number[] } }[]) {
+    expect(entry.analysis.bpm).toBeGreaterThan(100);
+    expect(entry.analysis.barLevels.length).toBeGreaterThan(10);
+  }
 
-  // A new computer: nothing saved in the browser. Open the same folder: everything comes back from the file.
+  // A new computer: nothing saved in the browser. Open the same folder: everything comes back from the file — the
+  // analysis too, so nothing is analysed again (a watcher notes if "Analysing" ever shows).
+  await page.addInitScript(() => {
+    const w = window as unknown as { sawAnalysing: boolean };
+    w.sawAnalysing = false;
+    new MutationObserver(() => {
+      // The progress line ("Analysing 1 of 4: …") shows only while songs are really analysed.
+      if (/Analysing \d+ of \d+/.test(document.body?.innerText ?? "")) w.sawAnalysing = true;
+    }).observe(document, { subtree: true, childList: true, characterData: true });
+  });
   await page.goto("/help");
   await page.evaluate(
     () =>
@@ -112,6 +128,7 @@ test("settings travel with the music folder: imported on open, kept up to date, 
   await expect(page.getByRole("row", { name: /Test Groove B/ })).toContainText("⛔");
   await expect(page.getByRole("row", { name: /Test Groove C/ })).toContainText("★");
   await expect(page.getByRole("slider", { name: "Club speakers volume" })).toHaveValue("40");
+  expect(await page.evaluate(() => (window as unknown as { sawAnalysing: boolean }).sawAnalysing)).toBe(false);
 
   // Cue out (from the file): the auto-DJ hands over there — about 0:32 — instead of after the song's drops.
   await page.click("nav >> text=Booth");

@@ -94,8 +94,10 @@ the venue's public performance licences current (in India, for example, PPL and 
 ## Admin
 
 - **Library** — folder, analysis, deck count and key lock (beta). Press **Save settings in the music folder** once
-  and the app keeps `ai-dj-mixer-settings.json` there (settings and every song's edits); open the folder on any
-  computer and they come back. The track table shows your music folder as it is
+  and the app keeps `ai-dj-mixer-settings.json` there (settings, every song's edits and its analysis); open the folder
+  on any computer and they come back without analysing again. **iPad / Safari, music on a USB drive:** pick the songs
+  — and that JSON — with *Add files (this session only)*: analysed songs are ready at once (the device also remembers
+  songs it has analysed). *Download analysis file* saves the JSON to copy onto the drive. The track table shows your music folder as it is
   (folders and subfolders that open and close, with song counts and analysis progress; or a plain List). Every setting applies straight away, also
   during a set and from another browser tab — no refresh or Stop needed. The track table flags problems
   (*Needs attention*); **Edit** a track to mark it *Favourite* / *Never play*, add it to crates, fix its beat grid

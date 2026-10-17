@@ -285,8 +285,21 @@ hand-over lands there, when it is still ahead; otherwise `mixOutPoint`. `schedul
 (drop swaps, Desi Night / AI DJ-off holds) and the layer safety swap; the track view's MIX marker follows.
 
 Settings file (`lib/library/settingsFile.ts` PURE + tested, `settingsFolder.ts` client): `ai-dj-mixer-settings.json`
-in the music folder's root — portable settings (deck count, key lock, mood edits, volumes; never device ids) and each
-edited song's `editsOf` (flag, crates, cues, hot cues, saved loops, overrides) keyed by content id with path / title.
+in the music folder's root — portable settings (deck count, key lock, mood edits, volumes; never device ids), each
+edited song's `editsOf` (flag, crates, cues, hot cues, saved loops, overrides) keyed by content id with path / title,
+and (optional `analysis`, ignored by older versions) every ready song's `TrackAnalysis` by content id (`compactAnalysis`:
+bar levels rounded, `fullLevel` left to the overrides). `parseAnalysis` keeps only complete, current analyses
+(`version >= ANALYSIS_VERSION`); `analysesFor` gives them to songs still pending or stale, **by id only**; the store's
+`applyAnalyses` marks those ready (`withAnalysis`; not songs with a forced grid) on every read — whatever the file's
+age — before `analyzePending`. `contentKey` is a key-sorted JSON, so field order never forces a rewrite. While
+analysis runs the file is written at most every 15 s (`saveSettingsFileSoon(15_000)`) and once when it ends.
+`settingsFile.imported` keeps the file it came from (`from`, `savedAt`): the app's own file may be written later.
+Session files (iPad / Safari, e.g. from a USB drive; `addSessionFiles`): `.json` files picked with the songs are
+parsed as settings files — their edits (by id) and analysis apply to the session songs; songs this device saw before
+come back from `library:sessionTracks` (IndexedDB, analysis + edits by content id, newest `MAX_SESSION_TRACKS`
+kept; written by `persistTracks`). *Download analysis file* (`downloadSettingsFile`) builds the file with session songs
+(`buildSettingsFile(…, withSession)`, paths without `session:`) as a download. `e2e/session-analysis.spec.ts` runs
+the download → fresh browser flow in Chromium and WebKit.
 `useLibrary.syncSettingsFile()` runs on hydrate (folder ready), after a reconnect and after every scan (before
 analysis, so a fixed grid is analysed fixed): it reads our file, else any root `.json` that parses as ours, and
 imports it when its `savedAt` is newer than this computer's last sync (`settingsFile:syncedAt` in IndexedDB) —
@@ -660,7 +673,10 @@ device, and starts `next start -p 3100` (build first). Audio runs for real; noth
   threshold raised in the track editor (or they mix out at the outro / `maxPlayBars`).
 - The incoming track always starts at its first downbeat and plays its whole intro inside the blend
   (except drop swaps, which start a few bars before its drop).
-- Session-only tracks ("Add files") vanish on reload, so queued session tracks do too.
+- Session-only tracks ("Add files") vanish on reload, so queued session tracks do too — their analysis and edits are
+  remembered on the device (and in a picked settings file), so picking them again is instant. An iPad / Safari can't
+  write the settings file into a USB folder: *Download analysis file*, then copy it there in the Files app. Not tried
+  on a real iPad yet (Playwright's WebKit on a Mac only).
 - Previews (grid, Cue, picker) are disabled while the booth plays unless a separate preview output
   is chosen (Library → Audio outputs).
 - Offline: in-app navigation waits for the network; a full reload of a visited page works.

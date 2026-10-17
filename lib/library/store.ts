@@ -13,6 +13,7 @@ const db = typeof indexedDB !== "undefined" ? createStore("ai-dj-mixer", "kv") :
 const KEYS = {
   folder: "library:folder",
   tracks: "library:tracks",
+  sessionTracks: "library:sessionTracks",
   settings: "settings",
   session: "session:last",
   setLog: "setlog",
@@ -54,6 +55,22 @@ export async function saveFolderHandle(handle: FileSystemDirectoryHandle): Promi
 
 export async function clearFolderHandle(): Promise<void> {
   if (db) await del(KEYS.folder, db);
+}
+
+/**
+ * Session-only songs this device has seen (picked for one visit, e.g. from a USB drive on an iPad), by content id:
+ * their analysis and edits, so picking the same songs again is instant. At most MAX_SESSION_TRACKS (newest kept).
+ */
+export const MAX_SESSION_TRACKS = 5000;
+
+export async function loadSessionTracks(): Promise<Record<string, Track>> {
+  return (db ? await get<Record<string, Track>>(KEYS.sessionTracks, db) : undefined) ?? {};
+}
+
+export async function saveSessionTracks(tracks: Record<string, Track>): Promise<void> {
+  const list = Object.values(tracks);
+  const keep = list.length > MAX_SESSION_TRACKS ? list.sort((a, b) => b.addedAt - a.addedAt).slice(0, MAX_SESSION_TRACKS) : list;
+  if (db) await set(KEYS.sessionTracks, Object.fromEntries(keep.map((t) => [t.id, t])), db);
 }
 
 export async function loadTracks(): Promise<Record<string, Track>> {

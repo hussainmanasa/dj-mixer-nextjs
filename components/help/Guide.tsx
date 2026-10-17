@@ -112,7 +112,7 @@ export function Guide() {
               <B>BEAT SYNC</B> along the top; a small display with the song, key, BPM, time, its overview (green blocks = full sections, gaps
               = breakdowns, ⚑ = where it will start), Start from and ⏏ eject; the <B>jog wheel</B> with the <B>tempo slider</B> on its right;
               and at the bottom the round <B>CUE</B> and <B>▶ Play / ⏸ Pause</B> buttons beside the <B>pad modes</B> (HOT CUE, BEAT LOOP,
-              SAVED) and 8 pads. The badge says what the deck is doing: <B>On air</B>, <B>Cued</B> (comes in next), <B>Mixing in / out</B>,{" "}
+              SAVED — CUE, LOOP, SAVED on an iPad or small screen) and 8 pads. The badge says what the deck is doing: <B>On air</B>, <B>Cued</B> (comes in next), <B>Mixing in / out</B>,{" "}
               <B>Playing along</B>, <B>Paused</B>, <B>Standby</B> (spare song), <B>Loaded</B> (before Play) or <B>Empty</B>.
             </li>
             <li>
@@ -451,6 +451,15 @@ export function Guide() {
               without a folder until the page reloads.
             </li>
             <li>
+              <B>Playing from a USB drive (an iPad, or Safari):</B> these can&apos;t open a folder, so pick the songs on the drive with{" "}
+              <B>Add files (this session only)</B> — each visit, as the browser forgets them on a reload — and keep the drive plugged in.
+              Pick the drive&apos;s <span className="font-mono">ai-dj-mixer-settings.json</span> together with the songs: every song it has an
+              analysis for is ready at once, with its edits, and only new songs are analysed. This device also remembers the songs it has
+              analysed, so picking them again is instant even without the file. To make that file: open the drive as the music folder on a
+              computer with Chrome or Edge (it is saved there, see below), or press <B>Download analysis file</B> and copy the download onto
+              the drive with the Files app.
+            </li>
+            <li>
               The <B>track table</B> shows your music folder as it is on disk (<B>Folders</B> view): click a folder to open or close it; each
               folder shows how many songs it has and, while they are being analysed, how many are left and a progress bar. Songs are analysed
               folder by folder. <B>Expand all / Collapse all</B> open or close every folder, searching opens the folders with matches, and{" "}
@@ -462,14 +471,15 @@ export function Guide() {
             </li>
             <li>Decks, Key lock and Audio outputs are described under Before the night.</li>
             <li>
-              <B>Settings file in the music folder:</B> the app can keep its settings (decks, key lock, mood edits, volumes) and every
-              song&apos;s edits (★ / ⛔, crates, markers, cue pads, saved loops, beat-grid / key / drop fixes) in{" "}
+              <B>Settings file in the music folder:</B> the app can keep its settings (decks, key lock, mood edits, volumes), every
+              song&apos;s edits (★ / ⛔, crates, markers, cue pads, saved loops, beat-grid / key / drop fixes) and every song&apos;s analysis in{" "}
               <span className="font-mono">ai-dj-mixer-settings.json</span> inside your music folder. Press{" "}
               <B>Save settings in the music folder</B> once (Chrome asks to let the app edit files there); after that it&apos;s kept up to date
               automatically. Whenever the folder is opened or rescanned — on this computer or any other — the app reads the file (or any
               of its .json files that is one of ours) and takes it over if it&apos;s newer. Copy the folder to another computer and open it: the
-              songs come with their edits. Audio devices aren&apos;t saved (they differ per computer), and songs are matched by their
-              content, so renaming or moving them keeps their edits.
+              songs come with their edits, and analysed songs are ready without analysing them again. Audio devices aren&apos;t saved (they
+              differ per computer), and songs are matched by their content, so renaming or moving them keeps their edits (a changed file is
+              analysed again).
             </li>
           </ul>
         </Section>

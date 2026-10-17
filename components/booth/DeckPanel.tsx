@@ -39,10 +39,10 @@ const ROLE_LABEL: Record<DeckRole, string> = {
 
 /** Pad modes, like the controller's: the 8 pads are cue pads, beat loops or the song's saved loops. */
 type PadMode = "hotcue" | "beatloop" | "savedloop";
-const PAD_MODES: { mode: PadMode; label: string; name: string }[] = [
-  { mode: "hotcue", label: "Hot cue", name: "Hot cue pads" },
-  { mode: "beatloop", label: "Beat loop", name: "Beat loop pads" },
-  { mode: "savedloop", label: "Saved", name: "Saved loop pads" },
+const PAD_MODES: { mode: PadMode; label: string; short: string; name: string }[] = [
+  { mode: "hotcue", label: "Hot cue", short: "Cue", name: "Hot cue pads" },
+  { mode: "beatloop", label: "Beat loop", short: "Loop", name: "Beat loop pads" },
+  { mode: "savedloop", label: "Saved", short: "Saved", name: "Saved loop pads" },
 ];
 const LOOP_BEATS = [0.25, 0.5, 1, 2, 4, 8, 16, 32];
 const LOOP_LABEL: Record<number, string> = { 0.25: "¼", 0.5: "½" };
@@ -779,7 +779,7 @@ function PadSection({
           <button
             key={m.mode}
             type="button"
-            className={`${SMALL_BUTTON} flex-1 truncate px-1`}
+            className={`${SMALL_BUTTON} min-w-0 flex-1 truncate px-0.5 tracking-normal xl:px-1 xl:tracking-wider`}
             aria-pressed={mode === m.mode}
             aria-label={`${m.name}, Deck ${letter}`}
             onClick={() => {
@@ -788,7 +788,9 @@ function PadSection({
             }}
             style={mode === m.mode ? { borderColor: color, color } : undefined}
           >
-            {m.label}
+            {/* Narrow decks (an iPad, a small laptop): the short name. */}
+            <span className="xl:hidden">{m.short}</span>
+            <span className="hidden xl:inline">{m.label}</span>
           </button>
         ))}
         <button

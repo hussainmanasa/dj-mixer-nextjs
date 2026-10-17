@@ -78,7 +78,8 @@ export function LibraryManager() {
               Add files (this session only)
               <input
                 type="file"
-                accept="audio/*"
+                // Songs, plus the folder's ai-dj-mixer-settings.json (it brings their analysis and edits).
+                accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.json,application/json"
                 multiple
                 className="sr-only"
                 data-testid="session-files"
@@ -89,12 +90,27 @@ export function LibraryManager() {
                 }}
               />
             </label>
+            <button
+              type="button"
+              className="btn"
+              disabled={counts.ready === 0}
+              onClick={() => s.downloadSettingsFile()}
+              title="Settings, song edits and analysis as ai-dj-mixer-settings.json — put it beside the music (e.g. on the USB drive)"
+            >
+              Download analysis file
+            </button>
             {counts.error > 0 && (
               <button type="button" onClick={() => s.retryFailed()} className="btn">
                 Retry {counts.error} failed
               </button>
             )}
           </div>
+          <p className="mt-3 text-xs text-muted">
+            Playing straight from a USB drive (an iPad, Safari): pick the songs with <strong>Add files (this session only)</strong>
+            — and pick the drive&apos;s <span className="font-mono">ai-dj-mixer-settings.json</span> with them, so songs analysed
+            before are ready at once. This device also remembers songs it has analysed. <strong>Download analysis file</strong>{" "}
+            saves that file to put on the drive.
+          </p>
           {s.error && <p className="mt-3 text-sm text-bad">{s.error}</p>}
           {s.folder && s.folderState === "ready" && <SettingsFileNote />}
           {s.analysis && (
@@ -175,7 +191,7 @@ function SettingsFileNote() {
     <div className="mt-4 rounded-xl border border-border bg-surface-2/60 p-3 text-sm" role="status" aria-label="Settings file">
       {f.status === "saved" && (
         <p>
-          Settings and song edits are saved in the music folder as <span className="font-mono">{f.name}</span>
+          Settings, song edits and analysis are saved in the music folder as <span className="font-mono">{f.name}</span>
           {f.savedAt ? ` · ${when(f.savedAt)}` : ""} — open this folder on any computer to get them back.
         </p>
       )}
@@ -188,7 +204,10 @@ function SettingsFileNote() {
                 kept there too.
               </>
             ) : (
-              <>Save the app&apos;s settings and every song&apos;s edits in the music folder, so they go wherever the music goes.</>
+              <>
+                Save the app&apos;s settings, every song&apos;s edits and its analysis in the music folder, so they go wherever the music
+                goes — another computer or an iPad needn&apos;t analyse it again.
+              </>
             )}
           </p>
           <button type="button" className="btn-primary" onClick={() => void enable()}>
@@ -200,8 +219,8 @@ function SettingsFileNote() {
       {f.imported && (
         <p className="mt-1 text-good">
           Imported settings{f.imported.songs ? ` and edits for ${f.imported.songs} song${f.imported.songs === 1 ? "" : "s"}` : ""} from{" "}
-          <span className="font-mono">{f.name}</span>
-          {f.savedAt ? ` (saved ${when(f.savedAt)})` : ""}.
+          <span className="font-mono">{f.imported.from}</span>
+          {f.imported.savedAt ? ` (saved ${when(f.imported.savedAt)})` : ""}.
         </p>
       )}
     </div>

@@ -7,16 +7,18 @@ import { useMemo } from "react";
 import { create } from "zustand";
 import { analyzeFile } from "@/lib/analysis/analyze";
 import { GridPreview, sharedPreview } from "@/lib/library/preview";
-import { applySettingsFile, buildSettingsFile, contentKey, SETTINGS_FILE } from "@/lib/library/settingsFile";
+import { analysesFor, applySettingsFile, buildSettingsFile, contentKey, parseSettingsFile, SETTINGS_FILE, type SettingsFile } from "@/lib/library/settingsFile";
 import { canWrite, readSettingsFile, requestWrite, writeSettingsFile } from "@/lib/library/settingsFolder";
 import { ANALYSIS_VERSION } from "@/lib/analysis/bpm";
 import { ensurePermission, fileId, getFileAt, isSupported, pickFolder, trackFromFile, walk } from "@/lib/library/scan";
 import {
   DEFAULT_SETTINGS,
   loadFolderHandle,
+  loadSessionTracks,
   loadSettings,
   loadTracks,
   saveFolderHandle,
+  saveSessionTracks,
   saveSettings,
   saveSettingsSync,
   loadSettingsSync,
@@ -42,7 +44,7 @@ interface LibraryState {
    * (the app may not write into the folder yet), `none` (no folder), `error`. `imported`: songs whose edits came
    * from the file the last time it was read.
    */
-  settingsFile: { status: "none" | "readonly" | "saved" | "error"; name?: string; savedAt?: number; imported?: { at: number; songs: number }; error?: string };
+  settingsFile: { status: "none" | "readonly" | "saved" | "error"; name?: string; savedAt?: number; imported?: { at: number; songs: number; from: string; savedAt: number }; error?: string };
   /** Read the folder's settings file and take it over if it is newer than this computer's last sync. */
   syncSettingsFile: () => Promise<void>;
   /** Let the app write the settings file into the music folder (asks Chrome's "edit files" permission). */
@@ -64,8 +66,14 @@ interface LibraryState {
   setOutputs: (outputs: { mainOutput?: string; previewOutput?: string | null }) => Promise<void>;
   /** Save an edited mood (only the fields that differ from the preset are stored); null resets it. */
   saveMood: (mood: Mood | null, id: MoodId) => Promise<void>;
-  /** Fallback when folders can't be opened: add files for this session only. */
+  /**
+   * Fallback when folders can't be opened: add files for this session only. Songs this device has seen before come
+   * back with their analysis and edits; a settings file picked with them (ai-dj-mixer-settings.json) brings the
+   * analysis and edits it holds, so only new songs are analysed.
+   */
   addSessionFiles: (files: File[]) => Promise<void>;
+  /** Save the settings file — settings, every song's edits and analysis, session songs too — as a download. */
+  downloadSettingsFile: () => void;
   getFile: (track: Track) => Promise<File>;
   markError: (id: string, message: string) => void;
   setFlag: (id: string, flag: TrackFlag | undefined) => Promise<void>;
@@ -98,9 +106,38 @@ const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("
 
 async function persistTracks(tracks: Record<string, Track>): Promise<void> {
   const keep: Record<string, Track> = {};
-  for (const t of Object.values(tracks)) if (!t.path.startsWith(SESSION_PREFIX)) keep[t.id] = t;
+  const session: Track[] = [];
+  for (const t of Object.values(tracks)) {
+    if (!t.path.startsWith(SESSION_PREFIX)) keep[t.id] = t;
+    else if (t.status === "ready" && t.analysis) session.push(t);
+  }
   await saveTracks(keep);
+  // Session songs vanish on reload, but this device remembers their analysis and edits for the next time they're picked.
+  if (session.length) {
+    const seen = await loadSessionTracks();
+    for (const t of session) seen[t.id] = t;
+    await saveSessionTracks(seen);
+  }
   channel?.postMessage("tracks");
+}
+
+/**
+ * Take a settings file's analysis for the songs that still need one (matched by content id): they're ready without
+ * being analysed here. A fixed beat grid (an override) isn't taken over: those songs are analysed on their grid.
+ */
+function applyAnalyses(file: SettingsFile): void {
+  const tracks = useLibrary.getState().tracks;
+  const found = analysesFor(file, tracks);
+  const changed: Record<string, Track> = {};
+  for (const [id, analysis] of Object.entries(found)) {
+    const t = tracks[id];
+    if (t.overrides?.bpm !== undefined || t.overrides?.firstBeat !== undefined) continue;
+    changed[id] = withAnalysis(t, analysis);
+  }
+  if (!Object.keys(changed).length) return;
+  const next = { ...tracks, ...changed };
+  useLibrary.setState({ tracks: next });
+  void persistTracks(next);
 }
 
 async function persistSettings(settings: Settings): Promise<void> {
@@ -116,9 +153,14 @@ let synced: FileSystemDirectoryHandle | null = null;
 let lastWritten = "";
 let fileTimer: ReturnType<typeof setTimeout> | undefined;
 
-function saveSettingsFileSoon() {
+function saveSettingsFileSoon(ms = 1000) {
+  // A longer wait never pushes back a write that's already due sooner.
+  if (fileTimer && ms > 1000) return;
   clearTimeout(fileTimer);
-  fileTimer = setTimeout(() => void writeSettingsNow(false), 1000);
+  fileTimer = setTimeout(() => {
+    fileTimer = undefined;
+    void writeSettingsNow(false);
+  }, ms);
 }
 
 async function writeSettingsNow(force: boolean) {
@@ -294,6 +336,8 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     try {
       const found = await readSettingsFile(folder);
       const writable = await canWrite(folder);
+      // Songs the file has an analysis for (by content) don't need analysing here — whatever the file's age.
+      if (found) applyAnalyses(found.file);
       if (found && found.file.savedAt > (await loadSettingsSync())) {
         // Newer than this computer's last sync (another computer, or this is a new one): take it over.
         const settings = { ...get().settings, ...found.file.settings };
@@ -318,7 +362,8 @@ export const useLibrary = create<LibraryState>((set, get) => ({
             status: writable ? "saved" : "readonly",
             name: found.name,
             savedAt: found.file.savedAt,
-            imported: { at: Date.now(), songs: Object.keys(changed).length },
+            // (Which file it came from, and when that was saved: the app's own file may be written over it later.)
+            imported: { at: Date.now(), songs: Object.keys(changed).length, from: found.name, savedAt: found.file.savedAt },
           },
         });
       } else {
@@ -373,17 +418,51 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   },
 
   async addSessionFiles(files) {
+    // A settings file picked with the songs (from the music's folder on a USB drive, say).
+    const picked: SettingsFile[] = [];
+    for (const file of files) {
+      if (!file.name.toLowerCase().endsWith(".json") || file.size > 50_000_000) continue;
+      const parsed = parseSettingsFile(await file.text());
+      if (parsed) picked.push(parsed);
+    }
+    if (files.some((f) => f.name.toLowerCase().endsWith(".json")) && !picked.length)
+      set({ error: "That .json file isn't an AI DJ Mixer settings file — the songs were added without it." });
+    const seen = await loadSessionTracks();
     const tracks = { ...get().tracks };
     for (const file of files) {
       if (!isSupported(file.name)) continue;
       const id = await fileId(file);
-      if (tracks[id]) continue;
       const path = `${SESSION_PREFIX}${file.name}`;
+      if (tracks[id]) {
+        // Picked again this visit (e.g. after the file input was used twice): keep reading the newest pick.
+        if (tracks[id].path === path) sessionFiles.set(path, file);
+        continue;
+      }
       sessionFiles.set(path, file);
-      tracks[id] = await trackFromFile({ path, file }, id);
+      // Seen on this device before: its analysis and edits come back.
+      const known = seen[id];
+      tracks[id] = known ? { ...known, path, status: known.analysis ? "ready" : "pending" } : await trackFromFile({ path, file }, id);
     }
     set({ tracks });
+    for (const f of picked) {
+      // The file's edits for these songs (matched by content), then its analysis for any still to analyse.
+      const changed = applySettingsFile(f, get().tracks);
+      if (Object.keys(changed).length) set({ tracks: { ...get().tracks, ...changed } });
+      applyAnalyses(f);
+    }
     void get().analyzePending();
+  },
+
+  downloadSettingsFile() {
+    const file = buildSettingsFile(get().settings, get().tracks, Date.now(), true);
+    const url = URL.createObjectURL(new Blob([JSON.stringify(file, null, 2)], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = SETTINGS_FILE;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
   },
 
   async getFile(track) {
@@ -537,5 +616,7 @@ if (channel) {
 
 // Settings or song edits changed: keep the folder's settings file up to date.
 useLibrary.subscribe((state, prev) => {
-  if (state.settings !== prev.settings || state.tracks !== prev.tracks) saveSettingsFileSoon();
+  // While songs are being analysed the file grows with every one: write it at most every 15 s, and once at the end.
+  if (state.analysis === null && prev.analysis !== null) saveSettingsFileSoon();
+  else if (state.settings !== prev.settings || state.tracks !== prev.tracks) saveSettingsFileSoon(state.analysis ? 15_000 : 1000);
 });
