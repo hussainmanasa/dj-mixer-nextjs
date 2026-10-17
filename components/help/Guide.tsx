@@ -452,7 +452,9 @@ export function Guide() {
             </li>
             <li>
               <B>Playing from a USB drive (an iPad, or Safari):</B> these can&apos;t open a folder, so pick the songs on the drive with{" "}
-              <B>Add files (this session only)</B> — each visit, as the browser forgets them on a reload — and keep the drive plugged in.
+              <B>Add files (this session only)</B> (or <B>Add a folder (this session only)</B>, where the picker lets you choose a folder) —
+              each visit, as the browser forgets them on a reload — and keep the drive plugged in. You can add songs in several goes:
+              they add up.
               Pick the drive&apos;s <span className="font-mono">ai-dj-mixer-settings.json</span> together with the songs: every song it has an
               analysis for is ready at once, with its edits, and only new songs are analysed. This device also remembers the songs it has
               analysed, so picking them again is instant even without the file. To make that file: open the drive as the music folder on a

@@ -90,6 +90,22 @@ export function LibraryManager() {
                 }}
               />
             </label>
+            {/* A whole folder at once (with its settings file), where the browser's picker can choose folders. */}
+            <label className="btn cursor-pointer">
+              Add a folder (this session only)
+              <input
+                type="file"
+                multiple
+                className="sr-only"
+                data-testid="session-folder"
+                ref={(el) => el?.setAttribute("webkitdirectory", "")}
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? []);
+                  e.target.value = "";
+                  void s.addSessionFiles(files);
+                }}
+              />
+            </label>
             <button
               type="button"
               className="btn"

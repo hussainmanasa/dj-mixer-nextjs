@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, webkit, type Browser, type Page } from "@playwright/test";
 import { FIXTURE_DIR } from "./fixtures";
@@ -76,4 +76,43 @@ test("“Download analysis file”, picked with the songs in a fresh browser, ma
       await safari.close();
     }
   }
+});
+
+test("songs picked one at a time add up — two different songs with the same file name both stay, each with its own sound", async ({ page }) => {
+  test.setTimeout(240_000);
+  const [a, b] = songs().filter((f) => f.endsWith(".wav"));
+  // Two different songs, both called "song.wav" (as two folders on a USB drive could have).
+  const one = test.info().outputPath("one");
+  const two = test.info().outputPath("two");
+  mkdirSync(one, { recursive: true });
+  mkdirSync(two, { recursive: true });
+  copyFileSync(a, join(one, "song.wav"));
+  copyFileSync(b, join(two, "song.wav"));
+  await page.goto("/library");
+  await page.setInputFiles('[data-testid="session-files"]', join(one, "song.wav"));
+  await ready(page, 1);
+  await page.setInputFiles('[data-testid="session-files"]', join(two, "song.wav"));
+  await ready(page, 2);
+  // Both rows, each analysed from its own file (their tempos differ).
+  const rows = page.getByRole("row", { name: /^song/ });
+  const bpms = async () => new Set((await rows.allInnerTexts()).map((t) => t.match(/\b(1[0-9]{2}\.\d)\b/)?.[1]));
+  await expect(rows).toHaveCount(2);
+  expect((await bpms()).size).toBe(2);
+  // Picked together, too (in a fresh page): neither replaces the other before it's analysed.
+  await page.reload();
+  await page.evaluate(() => new Promise<void>((r) => {
+    const req = indexedDB.deleteDatabase("ai-dj-mixer");
+    req.onsuccess = req.onerror = req.onblocked = () => r();
+  }));
+  await page.reload();
+  await page.setInputFiles('[data-testid="session-files"]', [join(one, "song.wav"), join(two, "song.wav")]);
+  await ready(page, 2);
+  await expect(rows).toHaveCount(2);
+  expect((await bpms()).size).toBe(2);
+});
+
+test("“Add a folder (this session only)” adds a whole folder at once", async ({ page }) => {
+  await page.goto("/library");
+  await page.setInputFiles('[data-testid="session-folder"]', FIXTURE_DIR);
+  await ready(page, songs().length);
 });

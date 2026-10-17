@@ -94,6 +94,10 @@ interface LibraryState {
 let analysisRunning = false;
 
 /** Files added via the file input; not persisted (the browser can't reopen them). */
+/**
+ * Keyed by the song's content id, not its name: two different songs can share a file name (an iPad may hand over
+ * files with the same name), and one must never play the other.
+ */
 const sessionFiles = new Map<string, File>();
 const SESSION_PREFIX = "session:";
 
@@ -429,16 +433,20 @@ export const useLibrary = create<LibraryState>((set, get) => ({
       set({ error: "That .json file isn't an AI DJ Mixer settings file — the songs were added without it." });
     const seen = await loadSessionTracks();
     const tracks = { ...get().tracks };
+    const taken = new Set(Object.values(tracks).map((t) => t.path));
     for (const file of files) {
       if (!isSupported(file.name)) continue;
       const id = await fileId(file);
-      const path = `${SESSION_PREFIX}${file.name}`;
-      if (tracks[id]) {
-        // Picked again this visit (e.g. after the file input was used twice): keep reading the newest pick.
-        if (tracks[id].path === path) sessionFiles.set(path, file);
-        continue;
-      }
-      sessionFiles.set(path, file);
+      // Picked again this visit: the same song (same content) — keep reading the newest pick.
+      sessionFiles.set(id, file);
+      if (tracks[id]) continue;
+      // Shown under its folder (a folder pick, minus the picked folder itself) or its name — made unique, so two
+      // songs with the same name both show.
+      const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath?.split("/").filter(Boolean) ?? [];
+      const base = `${SESSION_PREFIX}${rel.length > 1 ? rel.slice(1).join("/") : file.name}`;
+      let path = base;
+      for (let n = 2; taken.has(path); n++) path = base.replace(/(\.[^./]+)?$/, (ext) => ` (${n})${ext}`);
+      taken.add(path);
       // Seen on this device before: its analysis and edits come back.
       const known = seen[id];
       tracks[id] = known ? { ...known, path, status: known.analysis ? "ready" : "pending" } : await trackFromFile({ path, file }, id);
@@ -466,7 +474,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   },
 
   async getFile(track) {
-    const sessionFile = sessionFiles.get(track.path);
+    const sessionFile = sessionFiles.get(track.id);
     if (sessionFile) return sessionFile;
     const { folder } = get();
     if (!folder) throw new Error("No music folder connected");

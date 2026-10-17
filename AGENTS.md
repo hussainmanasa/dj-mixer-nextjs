@@ -294,7 +294,10 @@ bar levels rounded, `fullLevel` left to the overrides). `parseAnalysis` keeps on
 age — before `analyzePending`. `contentKey` is a key-sorted JSON, so field order never forces a rewrite. While
 analysis runs the file is written at most every 15 s (`saveSettingsFileSoon(15_000)`) and once when it ends.
 `settingsFile.imported` keeps the file it came from (`from`, `savedAt`): the app's own file may be written later.
-Session files (iPad / Safari, e.g. from a USB drive; `addSessionFiles`): `.json` files picked with the songs are
+Session files (iPad / Safari, e.g. from a USB drive; `addSessionFiles`, also *Add a folder (this session only)* via
+`webkitdirectory` where the picker can choose folders): the picked `File`s live in `sessionFiles` **keyed by content id**
+(two songs with the same name must never play each other — an iPad may hand over same-named files), shown as
+`session:<name>` made unique (" (2)") or under their sub-folder for a folder pick; `.json` files picked with the songs are
 parsed as settings files — their edits (by id) and analysis apply to the session songs; songs this device saw before
 come back from `library:sessionTracks` (IndexedDB, analysis + edits by content id, newest `MAX_SESSION_TRACKS`
 kept; written by `persistTracks`). *Download analysis file* (`downloadSettingsFile`) builds the file with session songs
