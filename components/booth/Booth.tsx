@@ -57,6 +57,15 @@ export function Booth() {
     if (canPlay && folderState === "ready" && resumeAvailable) void tryAutoResume();
   }, [canPlay, folderState, resumeAvailable, tryAutoResume]);
 
+  // The floating Paused banner (nothing is playing): staff may close it; it comes back with the next pause.
+  const pausedBanner = status.silent && status.paused !== null && status.holding === null;
+  const [bannerClosed, setBannerClosed] = useState(false);
+  const [bannerWasOn, setBannerWasOn] = useState(pausedBanner);
+  if (pausedBanner !== bannerWasOn) {
+    setBannerWasOn(pausedBanner);
+    if (!pausedBanner) setBannerClosed(false);
+  }
+
   // Track picker: `next` replaces the cued track, otherwise it adds to the queue.
   const [picker, setPicker] = useState<{ next: boolean; loadDeck?: number } | null>(null);
   const preloads = useSession((s) => s.preloads);
@@ -118,12 +127,16 @@ export function Booth() {
       };
     }
     const { role, track } = deckRole(status, i);
+    // LOAD on the deck on air only while it's stopped (paused, not under a hand): a playing song can't be replaced.
+    const liveStopped = role === "live" && status.paused === i && status.holding !== i;
     const choose =
-      role === "live" || !canPlay || stopping
+      !canPlay || stopping || (role === "live" && !liveStopped)
         ? undefined
-        : role === "standby"
-          ? { label: "Queue track", open: () => setPicker({ next: false }) }
-          : { label: track ? "Change track" : "Choose track", open: () => setPicker({ next: true }) };
+        : liveStopped
+          ? { label: "Change track", open: () => setPicker({ next: false, loadDeck: i }) }
+          : role === "standby"
+            ? { label: "Queue track", open: () => setPicker({ next: false }) }
+            : { label: track ? "Change track" : "Choose track", open: () => setPicker({ next: true }) };
     const entry = role === "incoming" && status.next && !stopping ? { choice: status.next.entry, startAt: status.next.startAt, set: setEntry } : undefined;
     return {
       panel: {
@@ -149,6 +162,7 @@ export function Booth() {
         deck: i,
         track,
         choose,
+        loadBlocked: role === "live" && !liveStopped ? "Pause this deck first — a playing song can't be replaced" : undefined,
         cue: role === "incoming" && status.next && !stopping ? { plan: cuePlan(status.next.track, status.next.entry, false), blocked: !previewSeparate } : undefined,
         entry,
       },
@@ -221,11 +235,23 @@ export function Booth() {
       )}
 
       {/* Floats over the page (fixed), so the booth doesn't move when it appears. */}
-      {status.silent && status.paused !== null && status.holding === null && (
+      {pausedBanner && !bannerClosed && status.paused !== null && (
         <div
           role="status"
-          className="fixed inset-x-4 top-20 z-40 mx-auto flex max-w-5xl flex-wrap items-center justify-center gap-x-4 gap-y-1 rounded-2xl border-2 border-warn bg-[#1f1708]/95 px-5 py-4 text-center shadow-2xl backdrop-blur"
+          className="fixed inset-x-4 top-20 z-40 mx-auto flex max-w-5xl flex-wrap items-center justify-center gap-x-4 gap-y-1 rounded-2xl border-2 border-warn bg-[#1f1708]/95 px-12 py-4 text-center shadow-2xl backdrop-blur"
         >
+          {/* Closing hides it for this pause only: it shows again the next time the music stops. */}
+          <button
+            type="button"
+            onClick={() => setBannerClosed(true)}
+            aria-label="Close the Paused message"
+            title="Close (it shows again the next time the music stops)"
+            className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full text-warn hover:bg-warn/15"
+          >
+            <svg viewBox="0 0 12 12" className="h-3.5 w-3.5" aria-hidden>
+              <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+            </svg>
+          </button>
           <p className="text-2xl font-bold text-warn">Paused</p>
           <p className="text-lg">
             The club hears nothing.{" "}

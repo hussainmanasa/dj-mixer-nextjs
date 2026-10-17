@@ -56,6 +56,7 @@ function cell(v: string | number | null): string {
 const HOW: Record<SetLogEntry["how"], string> = {
   start: "Set start",
   recovery: "Automatic recovery",
+  loaded: "Loaded by staff",
   blend: "Blend",
   filterSweep: "Filter sweep",
   echoOut: "Echo-out",

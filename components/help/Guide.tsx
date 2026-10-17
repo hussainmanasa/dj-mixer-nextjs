@@ -251,7 +251,7 @@ export function Guide() {
             items={[
               [
                 "▶ Play / ⏸ Pause",
-                "One button. ⏸ stops the deck where it is; nothing else changes. With nothing else playing the club hears nothing until you press ▶ — for an announcement, a speech or the cake — and a yellow Paused banner shows. ▶ plays it from where it stands: with the other deck playing, in time with it (on its next beat) when their tempos allow, else straight away.",
+                "One button. ⏸ stops the deck where it is; nothing else changes. With nothing else playing the club hears nothing until you press ▶ — for an announcement, a speech or the cake — and a yellow Paused banner shows (✕ closes it; it shows again the next time the music stops). ▶ plays it from where it stands: with the other deck playing, in time with it (on its next beat) when their tempos allow, else straight away.",
               ],
               [
                 "▶ on the cued deck",
@@ -264,6 +264,10 @@ export function Guide() {
               [
                 "🎧 CUE (mixer)",
                 "Plays the cued (or loaded) song on the headphones only — the club hears nothing. Set start here makes the spot you're hearing the start point. Needs a separate preview output during a set (Library → Audio outputs).",
+              ],
+              [
+                "LOAD (mixer)",
+                "Chooses the song for a deck that isn't playing: the cued deck, an empty one, or the deck on air once it's paused — the new song waits there, stopped at its start, until ▶. A playing song can't be replaced (LOAD is greyed out: pause the deck first).",
               ],
               [
                 "⏏ Eject",
@@ -287,10 +291,10 @@ export function Guide() {
             rows={[
               [
                 "Loaded or cued (not playing)",
-                "Sets where the song will start. It turns like a record — one turn ≈ 1.8 s of the song (hold Shift: a quarter as far), the same feel and scratch sound as a playing song — and the start snaps to the beat when you let go. You hear it scratch on the speakers.",
+                "Sets where the song will start. It turns like a record — one turn ≈ 1.8 s of the song (hold Shift: a quarter as far), the same feel as a playing song — and the start snaps to the beat when you let go. It's silent: only a song on air is heard scratching, as with a DJ's records.",
               ],
-              ["Playing (on air, mixing in or playing along)", "Touch it and the song stops under your hand like a record; turn to scratch; let go and it plays on from there."],
-              ["Paused", "Moves the spot ▶ will play from — you hear it scratch on the speakers, like a record under your hand — and it stays paused. Press CUE there to make it the cue point."],
+              ["Playing (on air, mixing in or playing along)", "Touch it and the song stops under your hand like a record; turn to scratch — heard on the club speakers; let go and it plays on from there."],
+              ["Paused", "Moves the spot ▶ will play from, silently (a stopped record isn't heard), and it stays paused. Press CUE there to make it the cue point."],
             ]}
           />
           <p>The track view, the deck&apos;s time and its overview follow the wheel as you turn it.</p>

@@ -102,7 +102,7 @@ async function dragQuarterTurn(page: Page, jog: ReturnType<Page["getByRole"]>, r
   if (release) await page.mouse.up();
 }
 
-test("the jog wheel scratches on the club speakers; a playing cue resumes from the new start", async ({ page }) => {
+test("a loaded or cued deck's jog wheel moves the start silently (only a song on air scratches); a playing cue resumes from the new start", async ({ page }) => {
   const taps = await tapAudio(page);
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
@@ -114,34 +114,34 @@ test("the jog wheel scratches on the club speakers; a playing cue resumes from t
   const jog = page.getByRole("slider", { name: "Start point, Deck A" });
   const chip = () => deck(page, "A").getByText(/^Bar \d+\.\d$/);
 
-  // Cue it (headphones), then drag the wheel: the cue pauses and the scratch plays on the mix's engine.
+  // Cue it (headphones), then drag the wheel: the cue pauses while it turns, and nothing scratches — the song isn't on air.
   await page.getByRole("button", { name: "Listen, Deck A" }).click();
   await expect(page.getByRole("button", { name: "Stop listening, Deck A" })).toBeVisible();
   await dragQuarterTurn(page, jog, false);
   await expect(page.getByRole("button", { name: "Listen, Deck A" })).toBeVisible();
-  await expect.poll(async () => (await taps.get()).scrubPeak).toBeGreaterThan(0.01);
-  expect((await taps.get()).scrubHint).toBe("playback");
-  // It reaches the speakers through the limiter and master volume.
-  expect((await taps.get()).post).toBeGreaterThan(0.01);
+  await page.waitForTimeout(400);
+  expect((await taps.get()).scrubMessages.filter((m) => m === "target" || m === "play")).toEqual([]);
+  expect((await taps.get()).scrubPeak).toBeLessThan(0.001);
   await page.mouse.up();
   await expect(chip()).toHaveText("Bar 1.2");
-  // Let go: the scratch ends and the cue carries on from the new start.
+  // Let go: the cue carries on from the new start.
   await expect(page.getByRole("button", { name: "Stop listening, Deck A" })).toBeVisible({ timeout: 5000 });
   await expect(page.getByTestId("cue-head-A")).toContainText(/cue \d+:\d\d\.\d/);
-  expect((await taps.get()).scrubMessages).toEqual(expect.arrayContaining(["window", "target", "end"]));
 
-  // A key step plays a short blip from the new position.
+  // A key step moves the start a beat — silently too.
   await page.getByRole("button", { name: "Stop listening, Deck A" }).click();
   await jog.focus();
   await jog.press("ArrowRight");
-  await expect.poll(async () => (await taps.get()).scrubMessages.includes("play")).toBe(true);
+  await expect(chip()).toHaveText("Bar 1.3");
+  await page.waitForTimeout(400);
+  expect((await taps.get()).scrubMessages.filter((m) => m === "target" || m === "play")).toEqual([]);
 
-  // During a set the cued deck scratches too — over the music, on the same speakers (no separate output needed).
+  // During a set the cued deck's wheel moves its start silently as well; the song on air plays on.
   await page.locator("button[aria-busy]").click();
   await expect.poll(async () => (await deckStates(page)).join(" "), { timeout: 30_000 }).toMatch(/A:On air.*B:Cued/);
-  const before = (await taps.get()).scrubMessages.length;
   await dragQuarterTurn(page, page.getByRole("slider", { name: "Start point, Deck B" }));
-  await expect.poll(async () => (await taps.get()).scrubMessages.length).toBeGreaterThan(before);
+  await page.waitForTimeout(400);
+  expect((await taps.get()).scrubMessages.filter((m) => m === "target" || m === "play")).toEqual([]);
   await expect.poll(async () => (await deckStates(page)).join(" ")).toMatch(/A:On air/);
   expect(errors).toEqual([]);
 });

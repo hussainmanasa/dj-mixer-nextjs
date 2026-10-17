@@ -41,8 +41,11 @@ Full product plan: https://claude.ai/code/artifact/903692c7-9f12-49a9-9de1-5a82b
    From 15 Oct 2026 (owner): a **tempo slider on the on-air and cued decks** (±8%, through `AutoDJ.setDeckTempo`,
    which re-times the next mix), a **spinback** (flick the on-air jog backwards fast: the song spins back and the
    cued song drops in), and the song's **cover art** on the jog wheel. Also a **Sync** button per deck (one press
-   sets its BPM to the other deck's, through `setDeckTempo`) and **8 cue pads** (hot cues A–H) per deck. Jog wheels
-   scratch on the club speakers whether the music plays or is paused (owner, 18 Oct 2026). And (16 Oct 2026) **beat loops**
+   sets its BPM to the other deck's, through `setDeckTempo`) and **8 cue pads** (hot cues A–H) per deck. (Owner,
+   latest — supersedes "jog wheels scratch whether the music plays or is paused".) **Only a song on air scratches**, as
+   with a DJ's records: a hand holding a playing song is heard on the club speakers; a loaded, cued or paused deck's
+   wheel moves its spot silently. **LOAD works on any deck that isn't playing**, also the deck on air once paused
+   (`AutoDJ.loadOnAir`); a playing song can't be replaced. The **Paused banner can be closed** (back at the next pause). And (16 Oct 2026) **beat loops**
    (¼–16 beats) on the song on air, and an **AI DJ on/off** switch: off, the auto-DJ still cues the best next song but
    doesn't mix by itself (Up next waits for Drop / ▶ Play now); if nobody mixes it comes in near the song's end and AI
    DJ switches back on, so the music never stops. (17 Oct 2026) **▶ Play now** on the cued deck while a song is on
@@ -203,6 +206,15 @@ set it takes the next song off its deck when that song isn't playing (cued, or p
 CDJ, a playing song can't be ejected; the deck on air never). The deck stays empty: `ejectHold` stops `planNext` until
 staff LOAD (`request` ends the hold) or the song on air is `EJECT_REFILL_SECONDS` (30 s) from its end
 (`checkEjectHold`, every second, not while paused or looping); Stop and recovery end it too. `e2e/eject.spec.ts`.
+
+Scratch only on air: `DeckPanel`'s live wheel calls `scratchAt` only while `status.holding === deck` (a hand holding a
+playing song); the start-point wheel (loaded / cued decks) never does (it still pauses a playing 🎧 preview while it
+turns). LOAD on the deck on air: `Booth` gives it a LOAD only when `status.paused === i` and no hand holds it
+(`loadBlocked` explains the greyed-out button); the picker's `loadDeck` → `useSession.loadDeck` → `AutoDJ.loadOnAir`
+(decodes, loads the deck, a timeline standing at its `defaultStart`, `current` = the new song `touched` and `unlogged`,
+`paused` at its start). `logLoaded()` writes it to the set log ("loaded", "Loaded by staff") when it first plays (▶,
+CUE then ▶, or the never-stop rule). The Paused banner's ✕ (`bannerClosed`) resets whenever the banner goes away.
+`e2e/eject.spec.ts`, `e2e/deck-transport.spec.ts`.
 
 Jog follow: while a hand turns a jog wheel, `DeckPanel` writes the wheel's position to `jogScrub` (frame.ts, deck →
 track seconds) on every move and clears it on release / spinback / when the song or role changes. The frame loop

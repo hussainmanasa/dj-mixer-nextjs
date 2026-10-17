@@ -18,6 +18,8 @@ export interface Channel {
   track: Track | null;
   /** LOAD: choose the song for this deck (before Play: load it; during the set: the cued song / the queue). */
   choose?: { label: string; open: () => void };
+  /** Why LOAD is greyed out (e.g. the deck is playing). */
+  loadBlocked?: string;
   /** 🎧 CUE: listen to the deck's song on the headphones, and whether the club would hear it. */
   cue?: { plan: CuePlan; blocked: boolean };
   /** Where the deck's song starts ("Set start here" while listening). */
@@ -115,7 +117,7 @@ export function LoadButton({ channel }: { channel: Channel }) {
       disabled={!channel.choose}
       onClick={channel.choose?.open}
       aria-label={`${channel.choose?.label ?? (channel.track ? "Change track" : "Load track")}, Deck ${letter}`}
-      title={channel.choose?.label ?? "Load a song into this deck"}
+      title={channel.choose?.label ?? channel.loadBlocked ?? "Load a song into this deck"}
     >
       Load {letter}
       <span className="block truncate text-[9px] font-semibold normal-case tracking-normal text-[#9a9aa6]">{channel.choose?.label ?? "—"}</span>

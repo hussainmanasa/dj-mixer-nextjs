@@ -216,11 +216,11 @@ export function DeckPanel({
               spinBack(deck, pos);
             },
           },
-          // Turning it scratches on the club speakers — playing or paused, like a record under the hand — and the
-          // display follows the wheel as it turns.
+          // Turning it moves the song and the display follows the wheel. Like a DJ's record, it's heard only when the song
+          // is on air: a hand holding a playing song scratches on the club speakers; a paused song moves silently.
           onMove: (pos, step) => {
             jogScrub.set(deck, pos);
-            scratchAt(track, pos, step);
+            if (useSession.getState().status.holding === deck) scratchAt(track, pos, step);
           },
           onCommit: (pos) => {
             jogScrub.delete(deck);
@@ -238,17 +238,16 @@ export function DeckPanel({
           beat: barSeconds(a) / 4,
           label: `Start point, Deck ${DECK_LETTERS[deck]}`,
           valueText: (pos) => barLabel(beatBar(a, pos)),
-          onMove: (pos, step) => {
+          onMove: (pos) => {
             setScrubbing(pos);
             jogScrub.set(deck, pos);
-            // The scratch is heard on the club speakers: a drag follows the wheel, a key / scroll step
-            // plays a short blip. A playing preview pauses while scratching.
+            // Silent: this song isn't on air (owner: only a song on air scratches, as with a DJ's records). A playing
+            // headphone preview pauses while the wheel turns and carries on from the new start when it's let go.
             if (!scratch.current) {
               const preview = usePreview.getState();
               scratch.current = { resumeCue: preview.playing === cueTag };
               if (preview.playing) preview.stop();
             }
-            scratchAt(track, pos, step);
           },
           onCommit: (pos) => {
             const bar = beatBar(a, pos);

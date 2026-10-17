@@ -179,7 +179,7 @@ export interface SetLogEntry {
   path: string;
   mood: MoodId;
   /** How it came in: a transition, the first track of a set, or an automatic recovery. */
-  how: TransitionKind | "start" | "recovery";
+  how: TransitionKind | "start" | "recovery" | "loaded";
   requested: boolean;
   bpm: number;
   key: string | null;
