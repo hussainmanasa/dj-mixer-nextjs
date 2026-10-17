@@ -365,6 +365,11 @@ export const useSession = create<SessionState>((set, get) => ({
   loadDeck(deck, trackId) {
     const track = useLibrary.getState().tracks[trackId];
     if (!track?.analysis) return;
+    // During the set: onto the paused deck on air (a stopped deck takes a new song, like a CDJ).
+    if (dj?.isPlaying) {
+      void dj.loadOnAir(deck, track);
+      return;
+    }
     // A song sits on one deck at a time.
     const preloads = get().preloads.map((p) => (p?.track.id === trackId ? null : p));
     preloads[deck] = { track, entry: { kind: "auto" } };

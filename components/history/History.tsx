@@ -10,6 +10,7 @@ import { useMoods } from "@/store/library";
 const HOW_LABEL: Record<SetLogEntry["how"], string> = {
   start: "Set start",
   recovery: "Recovery",
+  loaded: "Loaded by staff",
   blend: "Blend",
   filterSweep: "Filter sweep",
   echoOut: "Echo-out",

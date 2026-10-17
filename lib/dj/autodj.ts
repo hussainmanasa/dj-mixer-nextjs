@@ -10,6 +10,7 @@
 
 import { AudioEngine } from "@/lib/audio/engine";
 import { REWIND_SECONDS, type Deck } from "@/lib/audio/deck";
+import { PlaybackTimeline } from "@/lib/audio/timeline";
 import type { MixerChannel } from "@/lib/audio/mixer";
 import type { FxKind } from "@/lib/audio/fx";
 import { libraryLoudness } from "@/lib/analysis/loudness";
@@ -207,7 +208,7 @@ export interface AutoDJDeps {
   /** The mood preset with the admin's edits (default: the built-in preset). Read fresh at every decision. */
   resolveMood?: (id: MoodId) => Mood;
   /** A track started playing (for the set log). */
-  onPlayed?: (track: Track, how: TransitionKind | "start" | "recovery", requested: boolean, mood: MoodId) => void;
+  onPlayed?: (track: Track, how: TransitionKind | "start" | "recovery" | "loaded", requested: boolean, mood: MoodId) => void;
 }
 
 interface Planned {
@@ -291,7 +292,7 @@ export class AutoDJ {
   private playing = false;
   /** The song on air. `from`: where it started (its cue point until CUE sets one). `touched`: staff played,
    *  paused or cued it — the auto-DJ doesn't mix out of it (it plays to its end, then the next song starts). */
-  private current: { deck: Deck; track: Track; startedAt: number; from: number; touched?: boolean } | null = null;
+  private current: { deck: Deck; track: Track; startedAt: number; from: number; touched?: boolean; unlogged?: boolean } | null = null;
   private planned: Planned | null = null;
   private standby: { deck: Deck; track: Track } | null = null;
   private history: string[] = [];
@@ -741,6 +742,7 @@ export class AutoDJ {
       // Back in time with the song playing along — or, let go by the hand / on its own, straight away.
       if (pair && !this.pausedAlong && !state.hold) this.resumeSynced(state.deck, cur.track, state, { deck: p!.deck, track: p!.track });
       else this.startNow(state.deck, cur.track, state, state.hold ? HOLD_FADE : fade);
+      this.logLoaded();
       this.startWatchdog();
       const a = cur.track.analysis;
       // Moved right up to the song's end: let the auto-DJ take over as if it had ended.
@@ -841,6 +843,50 @@ export class AutoDJ {
     if (!l) return;
     this.armed.delete(track.id);
     if (deck.setLoop(l.start, l.end)) this.loops.set(deck, l);
+  }
+
+  // ── LOAD on the deck on air ────────────────────────────────────────────────
+
+  /**
+   * LOAD on the deck whose song is on air while it is paused (like a CDJ: a stopped deck takes a new record, a playing
+   * one doesn't): `track` replaces that song, stopped at its start (its cue point) — ▶ plays it. Nothing else changes;
+   * staff chose it, so the auto-DJ leaves it alone (it plays to its end). False if the deck is playing, or the song is
+   * already on a deck.
+   */
+  async loadOnAir(index: number, track: Track): Promise<boolean> {
+    const cur = this.current;
+    const deck = this.engine.decks[index];
+    if (!this.playing || !cur || deck !== cur.deck || !this.paused || this.paused.hold || this.cueHeld) return false;
+    if (!track.analysis || track.id === cur.track.id || track.id === this.planned?.track.id) return false;
+    const buffer = await this.decodeTrack(track);
+    // (The set may have moved on while the song was decoding.)
+    if (!buffer || !this.playing || this.current !== cur || this.paused?.deck !== deck) return false;
+    this.endLoopOn(deck);
+    this.armed.delete(cur.track.id);
+    deck.load(track, buffer, this.loudnessTarget());
+    deck.resetControls(0);
+    const start = defaultStart(track);
+    // A stopped deck still shows a position: a timeline standing at its start.
+    deck.timeline = new PlaybackTimeline(this.engine.now - 1, start, 1);
+    // (Logged in the set log once it really plays: `logLoaded`.)
+    this.current = { deck, track, startedAt: this.engine.now, from: start, touched: true, unlogged: true };
+    this.paused = { deck, position: start, rate: 1, hold: false };
+    this.cuePoints.delete(deck);
+    this.note = null;
+    const p = this.planned;
+    if (this.isPair(p)) this.rearmPair(p!);
+    this.emit();
+    return true;
+  }
+
+  /** A song staff loaded on the deck on air starts playing: it goes into the set log now, and counts as played. */
+  private logLoaded(): void {
+    const cur = this.current;
+    if (!cur?.unlogged) return;
+    cur.unlogged = false;
+    cur.startedAt = this.engine.now;
+    this.remember(cur.track);
+    this.deps.onPlayed?.(cur.track, "loaded", true, this.mood.id);
   }
 
   // ── Eject ────────────────────────────────────────────────────────────────────
@@ -991,6 +1037,7 @@ export class AutoDJ {
     const held = this.cueHeld!;
     this.cueHeld = null;
     if (held.deck === this.current?.deck) {
+      this.logLoaded();
       this.startWatchdog();
       this.afterLiveResume();
     }
@@ -1362,6 +1409,7 @@ export class AutoDJ {
     if (st && cur) {
       this.paused = null;
       this.startNow(st.deck, cur.track, st, 0.05);
+      this.logLoaded();
       this.startWatchdog();
     }
     this.emit();

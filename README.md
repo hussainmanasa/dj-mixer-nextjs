@@ -30,8 +30,9 @@ Open http://localhost:3000, then:
    effects itself as the music changes (the FX pad lights up, marked "auto").
    **🎧 CUE** in the mixer plays a loaded or cued deck in your headphones (the preview output); **Set start here** makes
    that its start. The picker's **▶** previews a song before you choose it. On a loaded or cued deck you can
-   also turn the **jog wheel** (drag, scroll, or click it and use the arrow keys) to move its start point — it
-   scratches on the club speakers as you turn it (during a set, over the music).
+   also turn the **jog wheel** (drag, scroll, or click it and use the arrow keys) to move its start point — silently:
+   only a song on air is heard scratching. **LOAD** works on any deck that isn't playing — also the deck on air once
+   it's paused; a playing song can't be replaced. The **Paused** banner can be closed (✕).
    **Laid out like a Pioneer DDJ-FLX4**: Deck A · mixer · Deck B under the "screen" (moods, the track view — whose
    cued row says how the next song comes in — and a notes line). Each deck has the loop section (IN, OUT, 4 BEAT / EXIT, ½, 2×) and BEAT SYNC on top, a display, the jog
    wheel with its tempo slider, round CUE and ▶ / ⏸ buttons, and 8 pads with modes HOT CUE / BEAT LOOP (¼–32 beats) /
@@ -50,7 +51,7 @@ Open http://localhost:3000, then:
    else playing, the other deck's song starts at once, so the music never stops by itself.
    The **jog wheel** works like a record on every deck (one turn ≈ 1.8 s of the song): on the song on air touch it and
    the song stops under your hand, turn it to scratch, let go and it plays on; on a paused song it moves the spot ▶
-   plays from — scratching on the club speakers either way. Flick it **backwards fast** and let go for a
+   plays from, silently (only a song on air scratches, as with a DJ's records). Flick it **backwards fast** and let go for a
    **spinback** (or swipe two fingers down fast on a trackpad, or twist two fingers back on a touchscreen): the song
    spins back and the cued song drops in. The wheel's centre shows the song's cover art.
    **Tempo slider** beside each deck's wheel (±8%) changes that deck's tempo; double-click it, or press its %

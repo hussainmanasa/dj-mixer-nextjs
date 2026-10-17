@@ -138,3 +138,22 @@ test("a reload while paused doesn't start the music by itself", async ({ page })
   await expect(page.locator("button[aria-busy]")).toHaveText(/Play/);
   await expect(page.getByText("The last set was interrupted")).toHaveCount(0);
 });
+
+test("the Paused message can be closed; it comes back the next time the music stops", async ({ page }) => {
+  await loadLibrary(page);
+  await startBooth(page, "Groove");
+  await expect.poll(() => states(page), { timeout: 30_000 }).toMatch(/A:On air/);
+  const banner = page.getByRole("status").filter({ hasText: "The club hears nothing" });
+  await deck(page, "A").getByRole("button", { name: "Pause Deck A" }).click();
+  await expect(banner).toBeVisible();
+  await banner.getByRole("button", { name: "Close the Paused message" }).click();
+  await expect(banner).toHaveCount(0);
+  await page.waitForTimeout(1000);
+  await expect(banner).toHaveCount(0);
+  expect(await states(page)).toMatch(/A:Paused/);
+  // Play, then pause again: it shows again.
+  await deck(page, "A").getByRole("button", { name: "Play Deck A" }).click();
+  await expect.poll(() => states(page)).toMatch(/A:On air/);
+  await deck(page, "A").getByRole("button", { name: "Pause Deck A" }).click();
+  await expect(banner).toBeVisible();
+});
